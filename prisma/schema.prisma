@@ -1,0 +1,39 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Broadcast {
+  id           String      @id @default(cuid())
+  eventName    String
+  eventDate    String
+  certificate  Bytes
+  caption      String
+  createdAt    DateTime    @default(now())
+  recipients   Recipient[]
+}
+
+model Recipient {
+  id          String    @id @default(cuid())
+  name        String
+  email       String
+  status      String    // "success" or "failed"
+  sentAt      DateTime  @default(now())
+  broadcastId String
+  broadcast   Broadcast @relation(fields: [broadcastId], references: [id])
+}
+model SenderProfile {
+  id          String   @id @default(cuid())
+  name        String
+  department  String
+  contact     String
+  isDefault   Boolean  @default(false)
+  updatedAt   DateTime @updatedAt
+}
