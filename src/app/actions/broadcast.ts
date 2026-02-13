@@ -36,9 +36,52 @@ function buildEmailTemplate({
     const safeSenderName = sanitizeHtml(sender.name);
     const safeSenderDepartment = sanitizeHtml(sender.department);
     const safeSenderContact = sanitizeHtml(sender.contact || '');
-    const safePersonalizedCaptionHtml = sanitizeHtml(personalizedCaption).replace(/\n/g, '<br/>');
     const hasCustomCaption = personalizedCaption.trim().length > 0;
     const captionContainsYoutubeUrl = !!youtubeUrl && personalizedCaption.includes(youtubeUrl);
+
+    const formatCaptionParagraphs = (text: string): string => {
+        const normalized = text.replace(/\r\n/g, '\n').trim();
+        if (!normalized) {
+            return '';
+        }
+
+        let paragraphs: string[] = [];
+
+        if (normalized.includes('\n')) {
+            paragraphs = normalized
+                .split(/\n{2,}/)
+                .map((block) => block.trim())
+                .filter(Boolean);
+        } else {
+            const sentences = normalized
+                .split(/(?<=[.!?])\s+(?=[A-Z0-9\[])/)
+                .map((sentence) => sentence.trim())
+                .filter(Boolean);
+
+            const grouped: string[] = [];
+            let buffer: string[] = [];
+
+            for (const sentence of sentences) {
+                buffer.push(sentence);
+                if (buffer.length === 2) {
+                    grouped.push(buffer.join(' '));
+                    buffer = [];
+                }
+            }
+
+            if (buffer.length > 0) {
+                grouped.push(buffer.join(' '));
+            }
+
+            paragraphs = grouped.length > 0 ? grouped : [normalized];
+        }
+
+        return paragraphs
+            .map((paragraph) => `<p style="margin-bottom: 14px; white-space: normal;">${sanitizeHtml(paragraph).replace(/\n/g, '<br/>')}</p>`)
+            .join('\n');
+    };
+
+    const formattedCaptionHtml = formatCaptionParagraphs(personalizedCaption);
 
     const defaultBodyHtml = `
     <p style="margin-bottom: 16px;">Yth. Bapak/Ibu <strong>${safeRecipientName}</strong>,</p>
@@ -55,7 +98,7 @@ function buildEmailTemplate({
 `;
 
     const customBodyHtml = `
-    <p style="margin-bottom: 16px; white-space: normal;">${safePersonalizedCaptionHtml}</p>
+    ${formattedCaptionHtml}
     ${youtubeUrl && !captionContainsYoutubeUrl
             ? `<p style="margin-bottom: 16px;">Siaran ulang webinar dapat diakses di sini:<br><a href="${youtubeUrl}" style="color: #2563eb; text-decoration: underline;">${youtubeUrl}</a></p>`
             : ''}
