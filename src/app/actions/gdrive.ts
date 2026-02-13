@@ -1,6 +1,6 @@
 'use server';
 
-import { google } from 'googleapis';
+import { google, drive_v3 } from 'googleapis';
 import { auth } from '@/lib/auth';
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit';
 
@@ -52,13 +52,29 @@ export async function listDriveFiles(folderId: string): Promise<DriveFile[]> {
     const drive = getDriveClient();
 
     try {
-        const response = await drive.files.list({
-            q: `'${folderId}' in parents and trashed = false`,
-            fields: 'files(id, name)',
-            pageSize: 1000,
-        });
+        const allFiles: DriveFile[] = [];
+        let pageToken: string | undefined = undefined;
 
-        return (response.data.files || []) as DriveFile[];
+        do {
+            const response: { data: drive_v3.Schema$FileList } = await drive.files.list({
+                q: `'${folderId}' in parents and trashed = false`,
+                fields: 'nextPageToken, files(id, name)',
+                pageSize: 1000,
+                pageToken,
+            });
+
+            const files = (response.data.files || [])
+                .filter((file: drive_v3.Schema$File) => typeof file.id === 'string' && typeof file.name === 'string')
+                .map((file) => ({
+                    id: file.id as string,
+                    name: file.name as string,
+                }));
+
+            allFiles.push(...files);
+            pageToken = response.data.nextPageToken || undefined;
+        } while (pageToken);
+
+        return allFiles;
     } catch (error) {
         console.error('Error listing Drive files:', error);
         return [];
