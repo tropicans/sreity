@@ -6,8 +6,17 @@ type EmailProvider = 'gmail' | 'resend';
 // Get current provider from env
 const EMAIL_PROVIDER: EmailProvider = (process.env.EMAIL_PROVIDER as EmailProvider) || 'gmail';
 
-// Delay between emails in milliseconds (default: 1 second)
-const EMAIL_DELAY_MS = parseInt(process.env.EMAIL_DELAY_MS || '1000', 10);
+// Delay between emails in milliseconds
+// Default behavior:
+// - Gmail: 5000ms (safer for SMTP throttling)
+// - Resend: 1000ms
+const EMAIL_DELAY_MS = (() => {
+    if (process.env.EMAIL_DELAY_MS) {
+        return parseInt(process.env.EMAIL_DELAY_MS, 10);
+    }
+
+    return EMAIL_PROVIDER === 'gmail' ? 5000 : 1000;
+})();
 
 // Gmail transporter
 const gmailTransporter = nodemailer.createTransport({

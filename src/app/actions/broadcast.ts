@@ -38,6 +38,7 @@ function buildEmailTemplate({
     const safeSenderContact = sanitizeHtml(sender.contact || '');
     const safePersonalizedCaptionHtml = sanitizeHtml(personalizedCaption).replace(/\n/g, '<br/>');
     const hasCustomCaption = personalizedCaption.trim().length > 0;
+    const captionContainsYoutubeUrl = !!youtubeUrl && personalizedCaption.includes(youtubeUrl);
 
     const defaultBodyHtml = `
     <p style="margin-bottom: 16px;">Yth. Bapak/Ibu <strong>${safeRecipientName}</strong>,</p>
@@ -53,15 +54,15 @@ function buildEmailTemplate({
     </p>
 `;
 
-    const html = `
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.8; color: #333; max-width: 650px; margin: 0 auto; padding: 20px;">
-    ${hasCustomCaption ? `<p style="margin-bottom: 16px; white-space: normal;">${safePersonalizedCaptionHtml}</p>` : defaultBodyHtml}
+    const customBodyHtml = `
+    <p style="margin-bottom: 16px; white-space: normal;">${safePersonalizedCaptionHtml}</p>
+    ${youtubeUrl && !captionContainsYoutubeUrl
+            ? `<p style="margin-bottom: 16px;">Siaran ulang webinar dapat diakses di sini:<br><a href="${youtubeUrl}" style="color: #2563eb; text-decoration: underline;">${youtubeUrl}</a></p>`
+            : ''}
+`;
+
+    const standardBodyHtml = `
+    ${defaultBodyHtml}
 
     <p style="margin-bottom: 16px;">
         Sebagai bentuk apresiasi, bersama dengan email ini kami lampirkan <strong>e-sertifikat</strong> sebagai bukti keikutsertaan Anda.
@@ -82,6 +83,17 @@ function buildEmailTemplate({
         <p style="margin: 4px 0; color: #555;">${safeSenderDepartment}</p>
         ${safeSenderContact ? `<p style="margin: 4px 0; color: #555;">${safeSenderContact}</p>` : ''}
     </div>
+`;
+
+    const html = `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.8; color: #333; max-width: 650px; margin: 0 auto; padding: 20px;">
+    ${hasCustomCaption ? customBodyHtml : standardBodyHtml}
 </body>
 </html>
 `;
@@ -177,6 +189,16 @@ export async function sendBroadcastAction({
     youtubeUrl?: string;
 }) {
     const user = await ensureAuthenticatedUser();
+
+    const emailProvider = (process.env.EMAIL_PROVIDER || 'gmail').toLowerCase();
+    const gmailSafeDailyLimit = parseInt(process.env.GMAIL_DAILY_SAFE_LIMIT || '450', 10);
+
+    if (emailProvider === 'gmail' && recipients.length > gmailSafeDailyLimit) {
+        throw new Error(
+            `Jumlah penerima (${recipients.length}) melebihi batas aman Gmail per batch (${gmailSafeDailyLimit}). ` +
+            'Silakan kirim bertahap (mis. 300-450 per hari) untuk menghindari suspend/limit Gmail.',
+        );
+    }
 
     // Rate limit check
     const rateLimitResult = checkRateLimit(user.id || user.email || 'anonymous', RATE_LIMITS.broadcast);
