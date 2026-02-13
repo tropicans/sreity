@@ -100,6 +100,12 @@ export async function sendBroadcastAction({
             .replace(/\[Instansi\/Unit\]/g, sender.department)
             .replace(/\[Kontak\]/g, sender.contact);
 
+        const safeRecipientName = sanitizeHtml(recipient.name);
+        const safeSenderName = sanitizeHtml(sender.name);
+        const safeSenderDepartment = sanitizeHtml(sender.department);
+        const safeSenderContact = sanitizeHtml(sender.contact || '');
+        const safePersonalizedCaptionHtml = sanitizeHtml(personalizedCaption).replace(/\n/g, '<br/>');
+
         try {
             // Build professional HTML email template
             const htmlTemplate = `
@@ -110,12 +116,14 @@ export async function sendBroadcastAction({
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
 </head>
 <body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.8; color: #333; max-width: 650px; margin: 0 auto; padding: 20px;">
-    <p style="margin-bottom: 16px;">Yth. Bapak/Ibu <strong>${recipient.name}</strong>,</p>
+    <p style="margin-bottom: 16px;">Yth. Bapak/Ibu <strong>${safeRecipientName}</strong>,</p>
     
     <p style="margin-bottom: 16px;">Salam hangat,</p>
+
+    <p style="margin-bottom: 16px; white-space: normal;">${safePersonalizedCaptionHtml}</p>
     
     <p style="margin-bottom: 16px;">
-        Kami dari Panitia <strong>${eventName}</strong> mengucapkan terima kasih yang sebesar-besarnya atas partisipasi Anda dalam acara kami yang telah dilaksanakan pada hari <strong>${eventDate}</strong>.
+        Kami dari Panitia <strong>${safeEventName}</strong> mengucapkan terima kasih yang sebesar-besarnya atas partisipasi Anda dalam acara kami yang telah dilaksanakan pada hari <strong>${safeEventDate}</strong>.
     </p>
     
     <p style="margin-bottom: 16px;">
@@ -137,9 +145,9 @@ export async function sendBroadcastAction({
     <p style="margin-bottom: 8px;">Hormat kami,</p>
     
     <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid #eee;">
-        <p style="margin: 0; font-weight: bold;">${sender.name}</p>
-        <p style="margin: 4px 0; color: #555;">${sender.department}</p>
-        ${sender.contact ? `<p style="margin: 4px 0; color: #555;">${sender.contact}</p>` : ''}
+        <p style="margin: 0; font-weight: bold;">${safeSenderName}</p>
+        <p style="margin: 4px 0; color: #555;">${safeSenderDepartment}</p>
+        ${safeSenderContact ? `<p style="margin: 4px 0; color: #555;">${safeSenderContact}</p>` : ''}
     </div>
 </body>
 </html>

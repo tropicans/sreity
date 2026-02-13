@@ -1,31 +1,52 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Upload, Mail, Users, CheckCircle2, Loader2, Image as ImageIcon, Send, Edit3, X, ChevronRight, Download, FileText, Search, AlertCircle, LogOut } from 'lucide-react';
+import { Upload, Users, CheckCircle2, Loader2, Send, X, ChevronRight, Download, FileText, Search, AlertCircle, LogOut } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useDropzone } from 'react-dropzone';
 import Papa from 'papaparse';
+import Image from 'next/image';
 import { analyzeCertificateAction, sendBroadcastAction } from './actions/broadcast';
 import { signOut, useSession } from 'next-auth/react';
+
+type Recipient = { name: string; email: string };
+
+type AiResult = {
+    recipientName: string;
+    eventName: string;
+    eventDate: string;
+    caption: string;
+};
+
+type SenderProfile = {
+    id: string;
+    name: string;
+    department: string;
+    contact: string;
+};
+
+type SendResult = {
+    email: string;
+    status: string;
+};
 
 export default function Dashboard() {
     const [file, setFile] = useState<File | null>(null);
     const [certFiles, setCertFiles] = useState<File[]>([]);
-    const [recipients, setRecipients] = useState<{ name: string; email: string }[]>([]);
+    const [recipients, setRecipients] = useState<Recipient[]>([]);
     const [recipientsText, setRecipientsText] = useState('');
     const [isProcessing, setIsProcessing] = useState(false);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
-    const [aiResult, setAiResult] = useState<any>(null);
+    const [aiResult, setAiResult] = useState<AiResult | null>(null);
     const [editedCaption, setEditedCaption] = useState('');
-    const [senderProfiles, setSenderProfiles] = useState<any[]>([]);
-    const [selectedSender, setSelectedSender] = useState<any>(null);
+    const [senderProfiles, setSenderProfiles] = useState<SenderProfile[]>([]);
     const [senderForm, setSenderForm] = useState({ name: '', department: '', contact: '' });
     const [youtubeUrl, setYoutubeUrl] = useState('');
     const [certFolderPath, setCertFolderPath] = useState('');
-    const [results, setResults] = useState<any>(null);
-    const [step, setStep] = useState(1);
+    const [results, setResults] = useState<SendResult[] | null>(null);
     const [driveMatches, setDriveMatches] = useState<{ name: string; email: string; matched: boolean; fileName: string | null }[] | null>(null);
     const [isCheckingMatches, setIsCheckingMatches] = useState(false);
+    const [previewUrl, setPreviewUrl] = useState<string | null>(null);
     const { data: session } = useSession();
 
     const onDrop = (acceptedFiles: File[]) => {
@@ -42,7 +63,6 @@ export default function Dashboard() {
         }
 
         setResults(null);
-        setStep(1);
     };
 
     const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -61,7 +81,6 @@ export default function Dashboard() {
             setSenderProfiles(profiles);
             if (profiles.length > 0) {
                 const def = profiles[0];
-                setSelectedSender(def);
                 setSenderForm({ name: def.name, department: def.department, contact: def.contact });
             }
         };
@@ -72,15 +91,33 @@ export default function Dashboard() {
         const lines = recipientsText.split('\n');
         const parsed = lines
             .map(line => {
-                const parts = line.split(',');
-                if (parts.length < 2) return null;
-                const name = parts[0].trim();
-                const email = parts[1].trim();
+                const trimmedLine = line.trim();
+                if (!trimmedLine) return null;
+
+                const separatorIndex = trimmedLine.lastIndexOf(',');
+                if (separatorIndex < 0) return null;
+
+                const name = trimmedLine.slice(0, separatorIndex).trim();
+                const email = trimmedLine.slice(separatorIndex + 1).trim();
                 return name && email ? { name, email } : null;
             })
-            .filter(Boolean) as { name: string; email: string }[];
+            .filter(Boolean) as Recipient[];
         setRecipients(parsed);
     }, [recipientsText]);
+
+    useEffect(() => {
+        if (!file) {
+            setPreviewUrl(null);
+            return;
+        }
+
+        const url = URL.createObjectURL(file);
+        setPreviewUrl(url);
+
+        return () => {
+            URL.revokeObjectURL(url);
+        };
+    }, [file]);
 
     const handleAnalyze = async () => {
         if (!file) return;
@@ -90,10 +127,9 @@ export default function Dashboard() {
         formData.append('certificate', file);
 
         try {
-            const res = await analyzeCertificateAction(formData);
+            const res = await analyzeCertificateAction(formData) as AiResult;
             setAiResult(res);
             setEditedCaption(res.caption);
-            setStep(2);
         } catch (error) {
             console.error('Analysis failed:', error);
             alert('Gagal menganalisis sertifikat.');
@@ -115,14 +151,14 @@ export default function Dashboard() {
             header: true,
             skipEmptyLines: true,
             complete: (results) => {
-                const data = results.data as any[];
+                const data = results.data as Array<Record<string, string | undefined>>;
                 const formattedRecipients = data
                     .filter(r => (r.name || r.Nama) && (r.email || r.Email))
                     .map(r => `${r.name || r.Nama}, ${r.email || r.Email}`)
                     .join('\n');
                 setRecipientsText(formattedRecipients);
             },
-            error: (error: any) => {
+            error: (error) => {
                 console.error('CSV Parsing Error:', error);
                 alert('Gagal membaca file CSV.');
             }
@@ -164,13 +200,31 @@ export default function Dashboard() {
                 const { fetchCertificatesFromDrive, downloadDriveFile } = await import('./actions/gdrive');
                 const driveMatches = await fetchCertificatesFromDrive(certFolderPath.trim(), recipients);
 
+                const unmatchedRecipients = driveMatches
+                    .filter((match) => !match.fileId && !matchCert(match.name))
+                    .map((match) => match.name);
+
+                if (unmatchedRecipients.length > 0) {
+                    throw new Error(
+                        `Sertifikat tidak ditemukan untuk: ${unmatchedRecipients.join(', ')}. ` +
+                        'Samakan nama di CSV dengan nama file PDF di Google Drive, atau upload PDF lokal sebagai fallback.',
+                    );
+                }
+
                 recipientData = await Promise.all(driveMatches.map(async (match) => {
                     let buffer;
                     if (match.fileId) {
                         const driveBuffer = await downloadDriveFile(match.fileId);
-                        buffer = driveBuffer ? Array.from(driveBuffer) : Array.from(new Uint8Array(baseBuffer));
+                        if (!driveBuffer) {
+                            throw new Error(`Gagal mengunduh sertifikat dari Google Drive untuk ${match.name}`);
+                        }
+                        buffer = Array.from(driveBuffer);
                     } else {
-                        buffer = Array.from(new Uint8Array(baseBuffer));
+                        const matchedCert = matchCert(match.name);
+                        if (!matchedCert) {
+                            throw new Error(`Sertifikat tidak ditemukan untuk ${match.name}`);
+                        }
+                        buffer = Array.from(new Uint8Array(await matchedCert.arrayBuffer()));
                     }
                     return {
                         name: match.name,
@@ -206,7 +260,6 @@ export default function Dashboard() {
                 youtubeUrl: youtubeUrl.trim() || undefined
             });
             setResults(res);
-            setStep(3);
         } catch (error) {
             console.error(error);
             alert('Failed to send broadcast');
@@ -387,11 +440,15 @@ export default function Dashboard() {
                             {file ? (
                                 <div className="absolute inset-0 p-4">
                                     <div className="w-full h-full rounded-xl overflow-hidden relative group">
-                                        <img
-                                            src={URL.createObjectURL(file)}
-                                            alt="Preview"
-                                            className="w-full h-full object-cover opacity-60 grayscale group-hover:grayscale-0 transition-all duration-700"
-                                        />
+                                        {previewUrl && (
+                                            <Image
+                                                src={previewUrl}
+                                                alt="Preview"
+                                                fill
+                                                unoptimized
+                                                className="w-full h-full object-cover opacity-60 grayscale group-hover:grayscale-0 transition-all duration-700"
+                                            />
+                                        )}
                                         <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/40 backdrop-blur-sm opacity-100 group-hover:opacity-0 transition-opacity">
                                             <FileText className="w-12 h-12 text-white/40 mb-2" />
                                             <span className="text-sm font-medium text-white/80">{file.name}</span>
@@ -411,7 +468,7 @@ export default function Dashboard() {
                                     </div>
                                     <div className="space-y-1">
                                         <p className="text-lg font-medium">Drop image for analysis.</p>
-                                        <p className="text-sm text-[#86868b]">We'll automatically generate a caption for you.</p>
+                                        <p className="text-sm text-[#86868b]">We&apos;ll automatically generate a caption for you.</p>
                                     </div>
                                 </div>
                             )}
@@ -580,7 +637,7 @@ export default function Dashboard() {
                                                 transition={{ duration: 0.5 }}
                                             />
                                         </button>
-                                        <p className="text-[#86868b] text-sm">Targeting {recipients.length} recipients for "{aiResult.eventName}"</p>
+                                        <p className="text-[#86868b] text-sm">Targeting {recipients.length} recipients for &quot;{aiResult.eventName}&quot;</p>
                                     </div>
                                 </div>
                             </motion.section>
@@ -604,16 +661,16 @@ export default function Dashboard() {
                                     <div className="p-12 grid grid-cols-1 md:grid-cols-3 gap-12 border-b border-white/5">
                                         <div className="space-y-2">
                                             <span className="text-[#86868b] text-[10px] font-bold uppercase tracking-widest text-center block">Delivered</span>
-                                            <span className="text-5xl font-semibold block text-center text-[#30d158]">{results.filter((r: any) => r.status === 'success').length}</span>
+                                            <span className="text-5xl font-semibold block text-center text-[#30d158]">{results.filter((r) => r.status === 'success').length}</span>
                                         </div>
                                         <div className="space-y-2">
                                             <span className="text-[#86868b] text-[10px] font-bold uppercase tracking-widest text-center block">Bounced</span>
-                                            <span className="text-5xl font-semibold block text-center text-[#ff453a]">{results.filter((r: any) => r.status === 'failed').length}</span>
+                                            <span className="text-5xl font-semibold block text-center text-[#ff453a]">{results.filter((r) => r.status === 'failed').length}</span>
                                         </div>
                                         <div className="space-y-2">
                                             <span className="text-[#86868b] text-[10px] font-bold uppercase tracking-widest text-center block">Success Rate</span>
                                             <span className="text-5xl font-semibold block text-center">
-                                                {Math.round((results.filter((r: any) => r.status === 'success').length / results.length) * 100)}%
+                                                {Math.round((results.filter((r) => r.status === 'success').length / results.length) * 100)}%
                                             </span>
                                         </div>
                                     </div>
@@ -621,7 +678,7 @@ export default function Dashboard() {
                                     <div className="max-h-96 overflow-y-auto">
                                         <table className="w-full text-left text-sm">
                                             <tbody className="divide-y divide-white/5">
-                                                {results.map((r: any, i: number) => (
+                                                {results.map((r, i: number) => (
                                                     <tr key={i} className="hover:bg-white/[0.02] transition-colors">
                                                         <td className="px-12 py-5 font-medium">{r.email}</td>
                                                         <td className="px-12 py-5 text-right">

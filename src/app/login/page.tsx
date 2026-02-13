@@ -3,31 +3,30 @@
 import { signIn } from 'next-auth/react';
 import { motion } from 'framer-motion';
 import { Loader2 } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
 
 function LoginContent() {
     const [isLoading, setIsLoading] = useState(false);
-    const [error, setError] = useState<string | null>(null);
+    const [submitError, setSubmitError] = useState<string | null>(null);
     const searchParams = useSearchParams();
 
-    useEffect(() => {
-        const errorParam = searchParams.get('error');
-        if (errorParam === 'AccessDenied') {
-            setError('Akses ditolak. Email Anda tidak terdaftar dalam daftar yang diizinkan.');
-        } else if (errorParam) {
-            setError('Terjadi kesalahan saat login. Silakan coba lagi.');
-        }
-    }, [searchParams]);
+    const errorParam = searchParams.get('error');
+    const authError = errorParam === 'AccessDenied'
+        ? 'Akses ditolak. Email Anda tidak terdaftar dalam daftar yang diizinkan.'
+        : errorParam
+            ? 'Terjadi kesalahan saat login. Silakan coba lagi.'
+            : null;
+    const error = submitError || authError;
 
     const handleGoogleLogin = async () => {
         setIsLoading(true);
-        setError(null);
+        setSubmitError(null);
         try {
             await signIn('google', { callbackUrl: '/' });
-        } catch (err) {
-            setError('Gagal melakukan login');
+        } catch {
+            setSubmitError('Gagal melakukan login');
             setIsLoading(false);
         }
     };

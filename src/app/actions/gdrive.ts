@@ -1,6 +1,8 @@
 'use server';
 
 import { google } from 'googleapis';
+import { auth } from '@/lib/auth';
+import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit';
 
 interface DriveFile {
     id: string;
@@ -26,10 +28,27 @@ function getDriveClient() {
     return google.drive({ version: 'v3', auth: apiKey });
 }
 
+async function ensureAuthenticated() {
+    const session = await auth();
+    if (!session?.user) {
+        throw new Error('Unauthorized: Please login first');
+    }
+
+    return session.user.id || session.user.email || 'anonymous';
+}
+
+async function enforceDriveRateLimit(identifier: string) {
+    const rateLimitResult = checkRateLimit(identifier, RATE_LIMITS.checkDriveMatches);
+    if (!rateLimitResult.success) {
+        throw new Error(rateLimitResult.message || 'Rate limit exceeded');
+    }
+}
+
 /**
  * List files in a Google Drive folder.
  */
 export async function listDriveFiles(folderId: string): Promise<DriveFile[]> {
+    await ensureAuthenticated();
     const drive = getDriveClient();
 
     try {
@@ -50,6 +69,7 @@ export async function listDriveFiles(folderId: string): Promise<DriveFile[]> {
  * Download a file from Google Drive.
  */
 export async function downloadDriveFile(fileId: string): Promise<Buffer | null> {
+    await ensureAuthenticated();
     const drive = getDriveClient();
 
     try {
@@ -71,6 +91,9 @@ export async function fetchCertificatesFromDrive(
     folderId: string,
     recipients: { name: string; email: string }[]
 ): Promise<CertificateMatch[]> {
+    const identifier = await ensureAuthenticated();
+    await enforceDriveRateLimit(identifier);
+
     const files = await listDriveFiles(folderId);
     const results: CertificateMatch[] = [];
 
@@ -111,6 +134,9 @@ export async function checkDriveMatches(
     folderId: string,
     recipients: { name: string; email: string }[]
 ): Promise<{ name: string; email: string; matched: boolean; fileName: string | null }[]> {
+    const identifier = await ensureAuthenticated();
+    await enforceDriveRateLimit(identifier);
+
     const files = await listDriveFiles(folderId);
     const results: { name: string; email: string; matched: boolean; fileName: string | null }[] = [];
 
