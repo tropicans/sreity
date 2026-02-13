@@ -29,6 +29,9 @@ function buildEmailTemplate({
         .replace(/\[Nama Pengirim\]/g, sender.name)
         .replace(/\[Nama Penyelenggara\/Tim\]/g, sender.name)
         .replace(/\[Nama Penyelenggara\/Instansi\]/g, sender.name)
+        .replace(/\[Panitia\/Instansi\]/g, sender.name)
+        .replace(/\[Panitia\]/g, sender.name)
+        .replace(/\[Instansi\]/g, sender.department || sender.name)
         .replace(/\[Instansi\/Unit\]/g, sender.department)
         .replace(/\[Kontak\]/g, sender.contact || '');
 
