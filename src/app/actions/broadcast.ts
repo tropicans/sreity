@@ -37,6 +37,21 @@ function buildEmailTemplate({
     const safeSenderDepartment = sanitizeHtml(sender.department);
     const safeSenderContact = sanitizeHtml(sender.contact || '');
     const safePersonalizedCaptionHtml = sanitizeHtml(personalizedCaption).replace(/\n/g, '<br/>');
+    const hasCustomCaption = personalizedCaption.trim().length > 0;
+
+    const defaultBodyHtml = `
+    <p style="margin-bottom: 16px;">Yth. Bapak/Ibu <strong>${safeRecipientName}</strong>,</p>
+
+    <p style="margin-bottom: 16px;">Salam hangat,</p>
+
+    <p style="margin-bottom: 16px;">
+        Kami dari Panitia <strong>${safeEventName}</strong> mengucapkan terima kasih yang sebesar-besarnya atas partisipasi Anda dalam acara kami yang telah dilaksanakan pada hari <strong>${safeEventDate}</strong>.
+    </p>
+
+    <p style="margin-bottom: 16px;">
+        Kehadiran Bapak/Ibu sangat berarti dalam mendukung keberhasilan kegiatan ini. Semoga materi yang diperoleh bermanfaat dan mendukung peningkatan produktivitas kerja.
+    </p>
+`;
 
     const html = `
 <!DOCTYPE html>
@@ -46,19 +61,7 @@ function buildEmailTemplate({
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
 </head>
 <body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.8; color: #333; max-width: 650px; margin: 0 auto; padding: 20px;">
-    <p style="margin-bottom: 16px;">Yth. Bapak/Ibu <strong>${safeRecipientName}</strong>,</p>
-
-    <p style="margin-bottom: 16px;">Salam hangat,</p>
-
-    <p style="margin-bottom: 16px; white-space: normal;">${safePersonalizedCaptionHtml}</p>
-
-    <p style="margin-bottom: 16px;">
-        Kami dari Panitia <strong>${safeEventName}</strong> mengucapkan terima kasih yang sebesar-besarnya atas partisipasi Anda dalam acara kami yang telah dilaksanakan pada hari <strong>${safeEventDate}</strong>.
-    </p>
-
-    <p style="margin-bottom: 16px;">
-        Kehadiran Bapak/Ibu sangat berarti dalam mendukung keberhasilan kegiatan ini. Semoga materi yang diperoleh bermanfaat dan mendukung peningkatan produktivitas kerja.
-    </p>
+    ${hasCustomCaption ? `<p style="margin-bottom: 16px; white-space: normal;">${safePersonalizedCaptionHtml}</p>` : defaultBodyHtml}
 
     <p style="margin-bottom: 16px;">
         Sebagai bentuk apresiasi, bersama dengan email ini kami lampirkan <strong>e-sertifikat</strong> sebagai bukti keikutsertaan Anda.
