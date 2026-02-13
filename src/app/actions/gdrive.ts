@@ -149,12 +149,12 @@ export async function fetchCertificatesFromDrive(
 export async function checkDriveMatches(
     folderId: string,
     recipients: { name: string; email: string }[]
-): Promise<{ name: string; email: string; matched: boolean; fileName: string | null }[]> {
+): Promise<{ name: string; email: string; matched: boolean; fileName: string | null; fileId: string | null }[]> {
     const identifier = await ensureAuthenticated();
     await enforceDriveRateLimit(identifier);
 
     const files = await listDriveFiles(folderId);
-    const results: { name: string; email: string; matched: boolean; fileName: string | null }[] = [];
+    const results: { name: string; email: string; matched: boolean; fileName: string | null; fileId: string | null }[] = [];
 
     for (const recipient of recipients) {
         // Normalize recipient name
@@ -171,6 +171,7 @@ export async function checkDriveMatches(
             email: recipient.email,
             matched: !!matchedFile,
             fileName: matchedFile?.name || null,
+            fileId: matchedFile?.id || null,
         });
     }
 

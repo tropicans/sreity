@@ -30,6 +30,14 @@ type SendResult = {
     status: string;
 };
 
+type DriveMatchResult = {
+    name: string;
+    email: string;
+    matched: boolean;
+    fileName: string | null;
+    fileId: string | null;
+};
+
 export default function Dashboard() {
     const [file, setFile] = useState<File | null>(null);
     const [certFiles, setCertFiles] = useState<File[]>([]);
@@ -44,9 +52,13 @@ export default function Dashboard() {
     const [youtubeUrl, setYoutubeUrl] = useState('');
     const [certFolderPath, setCertFolderPath] = useState('');
     const [results, setResults] = useState<SendResult[] | null>(null);
-    const [driveMatches, setDriveMatches] = useState<{ name: string; email: string; matched: boolean; fileName: string | null }[] | null>(null);
+    const [driveMatches, setDriveMatches] = useState<DriveMatchResult[] | null>(null);
     const [isCheckingMatches, setIsCheckingMatches] = useState(false);
     const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+    const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+    const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+    const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
+    const [previewTitle, setPreviewTitle] = useState('');
     const { data: session } = useSession();
 
     const onDrop = (acceptedFiles: File[]) => {
@@ -118,6 +130,69 @@ export default function Dashboard() {
             URL.revokeObjectURL(url);
         };
     }, [file]);
+
+    useEffect(() => {
+        return () => {
+            if (pdfPreviewUrl) {
+                URL.revokeObjectURL(pdfPreviewUrl);
+            }
+        };
+    }, [pdfPreviewUrl]);
+
+    const closePreview = () => {
+        setIsPreviewOpen(false);
+        setIsPreviewLoading(false);
+        setPreviewTitle('');
+        if (pdfPreviewUrl) {
+            URL.revokeObjectURL(pdfPreviewUrl);
+            setPdfPreviewUrl(null);
+        }
+    };
+
+    const openPdfPreview = (bytes: number[], title: string) => {
+        if (pdfPreviewUrl) {
+            URL.revokeObjectURL(pdfPreviewUrl);
+        }
+
+        const blob = new Blob([new Uint8Array(bytes)], { type: 'application/pdf' });
+        const objectUrl = URL.createObjectURL(blob);
+        setPdfPreviewUrl(objectUrl);
+        setPreviewTitle(title);
+        setIsPreviewOpen(true);
+    };
+
+    const handlePreviewMatch = async (match: DriveMatchResult) => {
+        if (!match.matched) {
+            return;
+        }
+
+        setIsPreviewLoading(true);
+        try {
+            if (match.fileId) {
+                const { downloadDriveFile } = await import('./actions/gdrive');
+                const driveBuffer = await downloadDriveFile(match.fileId);
+
+                if (!driveBuffer) {
+                    throw new Error('File preview gagal diunduh dari Google Drive');
+                }
+
+                openPdfPreview(Array.from(driveBuffer), match.fileName || `${match.name}.pdf`);
+            } else {
+                const matchedCert = matchCert(match.name);
+                if (!matchedCert) {
+                    throw new Error('File PDF lokal tidak ditemukan untuk preview');
+                }
+
+                const localBuffer = await matchedCert.arrayBuffer();
+                openPdfPreview(Array.from(new Uint8Array(localBuffer)), matchedCert.name);
+            }
+        } catch (error) {
+            console.error('Preview failed:', error);
+            alert('Gagal membuka preview PDF. Coba cek kembali akses file/folder.');
+        } finally {
+            setIsPreviewLoading(false);
+        }
+    };
 
     const handleAnalyze = async () => {
         if (!file) return;
@@ -422,6 +497,16 @@ export default function Dashboard() {
                                                     <span className="text-[10px] text-[#86868b] truncate max-w-[150px]">
                                                         {match.matched ? match.fileName : 'File tidak ditemukan'}
                                                     </span>
+                                                    {match.matched && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handlePreviewMatch(match)}
+                                                            disabled={isPreviewLoading}
+                                                            className="ml-3 text-[10px] font-semibold text-[#2997ff] hover:text-[#66b6ff] transition-colors disabled:opacity-50"
+                                                        >
+                                                            {isPreviewLoading ? 'Loading...' : 'Preview'}
+                                                        </button>
+                                                    )}
                                                 </div>
                                             ))}
                                         </div>
@@ -711,6 +796,39 @@ export default function Dashboard() {
                     <span>Contact</span>
                 </div>
             </footer>
+
+            {isPreviewOpen && (
+                <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+                    <div className="w-full max-w-5xl h-[90vh] bg-[#0f0f11] border border-white/10 rounded-2xl overflow-hidden flex flex-col">
+                        <div className="px-5 py-3 border-b border-white/10 flex items-center justify-between">
+                            <div className="min-w-0">
+                                <p className="text-[10px] uppercase tracking-widest text-[#86868b]">PDF Preview</p>
+                                <p className="text-sm text-white truncate">{previewTitle}</p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={closePreview}
+                                className="p-2 rounded-lg hover:bg-white/10 transition-colors"
+                            >
+                                <X className="w-4 h-4" />
+                            </button>
+                        </div>
+                        <div className="flex-1 bg-black">
+                            {pdfPreviewUrl ? (
+                                <iframe
+                                    src={pdfPreviewUrl}
+                                    title="Certificate Preview"
+                                    className="w-full h-full"
+                                />
+                            ) : (
+                                <div className="w-full h-full flex items-center justify-center text-[#86868b] text-sm">
+                                    Preview tidak tersedia.
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
