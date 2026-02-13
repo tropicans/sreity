@@ -1,12 +1,12 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Upload, Users, CheckCircle2, Loader2, Send, X, ChevronRight, Download, FileText, Search, AlertCircle, LogOut } from 'lucide-react';
+import { Upload, Users, CheckCircle2, Loader2, Send, X, ChevronRight, Download, FileText, Search, AlertCircle, LogOut, Eye, Mail } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useDropzone } from 'react-dropzone';
 import Papa from 'papaparse';
 import Image from 'next/image';
-import { analyzeCertificateAction, sendBroadcastAction } from './actions/broadcast';
+import { analyzeCertificateAction, sendBroadcastAction, generateEmailPreviewAction, sendTestEmailAction } from './actions/broadcast';
 import { signOut, useSession } from 'next-auth/react';
 
 type Recipient = { name: string; email: string };
@@ -59,6 +59,12 @@ export default function Dashboard() {
     const [isPreviewLoading, setIsPreviewLoading] = useState(false);
     const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
     const [previewTitle, setPreviewTitle] = useState('');
+    const [selectedPreviewRecipientEmail, setSelectedPreviewRecipientEmail] = useState('');
+    const [isEmailPreviewOpen, setIsEmailPreviewOpen] = useState(false);
+    const [isEmailPreviewLoading, setIsEmailPreviewLoading] = useState(false);
+    const [isSendingTestEmail, setIsSendingTestEmail] = useState(false);
+    const [emailPreviewHtml, setEmailPreviewHtml] = useState('');
+    const [emailPreviewSubject, setEmailPreviewSubject] = useState('');
     const { data: session } = useSession();
 
     const onDrop = (acceptedFiles: File[]) => {
@@ -118,6 +124,17 @@ export default function Dashboard() {
     }, [recipientsText]);
 
     useEffect(() => {
+        if (!recipients.length) {
+            setSelectedPreviewRecipientEmail('');
+            return;
+        }
+
+        if (!selectedPreviewRecipientEmail || !recipients.some(r => r.email === selectedPreviewRecipientEmail)) {
+            setSelectedPreviewRecipientEmail(recipients[0].email);
+        }
+    }, [recipients, selectedPreviewRecipientEmail]);
+
+    useEffect(() => {
         if (!file) {
             setPreviewUrl(null);
             return;
@@ -146,6 +163,67 @@ export default function Dashboard() {
         if (pdfPreviewUrl) {
             URL.revokeObjectURL(pdfPreviewUrl);
             setPdfPreviewUrl(null);
+        }
+    };
+
+    const getPreviewRecipient = () => {
+        if (!recipients.length) {
+            return null;
+        }
+
+        return recipients.find(r => r.email === selectedPreviewRecipientEmail) || recipients[0];
+    };
+
+    const handleOpenEmailPreview = async () => {
+        const previewRecipient = getPreviewRecipient();
+        if (!previewRecipient || !aiResult) {
+            return;
+        }
+
+        setIsEmailPreviewLoading(true);
+        try {
+            const preview = await generateEmailPreviewAction({
+                recipient: previewRecipient,
+                caption: editedCaption,
+                eventName: aiResult.eventName,
+                eventDate: aiResult.eventDate,
+                sender: senderForm,
+                youtubeUrl: youtubeUrl.trim() || undefined,
+            });
+
+            setEmailPreviewSubject(preview.subject);
+            setEmailPreviewHtml(preview.html);
+            setIsEmailPreviewOpen(true);
+        } catch (error) {
+            console.error('Email preview failed:', error);
+            alert('Gagal membuat preview email. Pastikan data pengirim, event, dan penerima valid.');
+        } finally {
+            setIsEmailPreviewLoading(false);
+        }
+    };
+
+    const handleSendTestEmail = async () => {
+        const previewRecipient = getPreviewRecipient();
+        if (!previewRecipient || !aiResult) {
+            return;
+        }
+
+        setIsSendingTestEmail(true);
+        try {
+            const result = await sendTestEmailAction({
+                recipient: previewRecipient,
+                caption: editedCaption,
+                eventName: aiResult.eventName,
+                eventDate: aiResult.eventDate,
+                sender: senderForm,
+                youtubeUrl: youtubeUrl.trim() || undefined,
+            });
+            alert(`Test email berhasil dikirim ke ${result.sentTo}`);
+        } catch (error) {
+            console.error('Send test email failed:', error);
+            alert('Gagal mengirim test email. Cek konfigurasi email dan coba lagi.');
+        } finally {
+            setIsSendingTestEmail(false);
         }
     };
 
@@ -705,6 +783,44 @@ export default function Dashboard() {
                                         />
                                     </div>
 
+                                    <div className="pt-6 border-t border-white/5 space-y-4">
+                                        <div className="grid grid-cols-1 md:grid-cols-[1fr_auto_auto] gap-3 items-end">
+                                            <div className="space-y-2">
+                                                <label className="text-[10px] font-bold uppercase tracking-widest text-[#86868b]">Preview Recipient</label>
+                                                <select
+                                                    value={selectedPreviewRecipientEmail}
+                                                    onChange={(e) => setSelectedPreviewRecipientEmail(e.target.value)}
+                                                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs outline-none focus:border-[#2997ff] transition-colors"
+                                                >
+                                                    {recipients.map((r) => (
+                                                        <option key={r.email} value={r.email}>{r.name} ({r.email})</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={handleOpenEmailPreview}
+                                                disabled={isEmailPreviewLoading || recipients.length === 0}
+                                                className="h-10 px-4 rounded-lg border border-[#2997ff]/30 bg-[#2997ff]/10 text-[#8dc8ff] hover:bg-[#2997ff]/20 transition-colors text-xs font-semibold flex items-center gap-2 disabled:opacity-50"
+                                            >
+                                                {isEmailPreviewLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Eye className="w-4 h-4" />}
+                                                Preview Email
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={handleSendTestEmail}
+                                                disabled={isSendingTestEmail || recipients.length === 0}
+                                                className="h-10 px-4 rounded-lg border border-white/15 bg-white/5 text-white hover:bg-white/10 transition-colors text-xs font-semibold flex items-center gap-2 disabled:opacity-50"
+                                            >
+                                                {isSendingTestEmail ? <Loader2 className="w-4 h-4 animate-spin" /> : <Mail className="w-4 h-4" />}
+                                                Send Test
+                                            </button>
+                                        </div>
+                                        <p className="text-[10px] text-[#86868b]">
+                                            Preview dan test email memakai konten personalisasi recipient terpilih. Test email dikirim ke akun login Anda.
+                                        </p>
+                                    </div>
+
                                     <div className="pt-10 flex flex-col items-center gap-6">
                                         <button
                                             onClick={handleSend}
@@ -822,6 +938,39 @@ export default function Dashboard() {
                                 />
                             ) : (
                                 <div className="w-full h-full flex items-center justify-center text-[#86868b] text-sm">
+                                    Preview tidak tersedia.
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {isEmailPreviewOpen && (
+                <div className="fixed inset-0 z-[110] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+                    <div className="w-full max-w-5xl h-[90vh] bg-[#0f0f11] border border-white/10 rounded-2xl overflow-hidden flex flex-col">
+                        <div className="px-5 py-3 border-b border-white/10 flex items-center justify-between">
+                            <div className="min-w-0">
+                                <p className="text-[10px] uppercase tracking-widest text-[#86868b]">Email Preview</p>
+                                <p className="text-sm text-white truncate">{emailPreviewSubject}</p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setIsEmailPreviewOpen(false)}
+                                className="p-2 rounded-lg hover:bg-white/10 transition-colors"
+                            >
+                                <X className="w-4 h-4" />
+                            </button>
+                        </div>
+                        <div className="flex-1 bg-white">
+                            {emailPreviewHtml ? (
+                                <iframe
+                                    srcDoc={emailPreviewHtml}
+                                    title="Email Preview"
+                                    className="w-full h-full"
+                                />
+                            ) : (
+                                <div className="w-full h-full flex items-center justify-center text-[#555] text-sm">
                                     Preview tidak tersedia.
                                 </div>
                             )}
