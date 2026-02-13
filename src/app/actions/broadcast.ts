@@ -27,6 +27,8 @@ function buildEmailTemplate({
     const personalizedCaption = caption
         .replace(/\[Nama\]/g, recipientName)
         .replace(/\[Nama Pengirim\]/g, sender.name)
+        .replace(/\[Nama Penyelenggara\/Tim\]/g, sender.name)
+        .replace(/\[Nama Penyelenggara\/Instansi\]/g, sender.name)
         .replace(/\[Instansi\/Unit\]/g, sender.department)
         .replace(/\[Kontak\]/g, sender.contact || '');
 
@@ -38,6 +40,7 @@ function buildEmailTemplate({
     const safeSenderContact = sanitizeHtml(sender.contact || '');
     const hasCustomCaption = personalizedCaption.trim().length > 0;
     const captionContainsYoutubeUrl = !!youtubeUrl && personalizedCaption.includes(youtubeUrl);
+    const captionHasClosing = /hormat\s+kami/i.test(personalizedCaption);
 
     const formatCaptionParagraphs = (text: string): string => {
         const normalized = text.replace(/\r\n/g, '\n').trim();
@@ -83,6 +86,16 @@ function buildEmailTemplate({
 
     const formattedCaptionHtml = formatCaptionParagraphs(personalizedCaption);
 
+    const signatureFooterHtml = `
+    <p style="margin-bottom: 8px;">Hormat kami,</p>
+
+    <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid #eee;">
+        <p style="margin: 0; font-weight: bold;">${safeSenderName}</p>
+        <p style="margin: 4px 0; color: #555;">${safeSenderDepartment}</p>
+        ${safeSenderContact ? `<p style="margin: 4px 0; color: #555;">${safeSenderContact}</p>` : ''}
+    </div>
+`;
+
     const defaultBodyHtml = `
     <p style="margin-bottom: 16px;">Yth. Bapak/Ibu <strong>${safeRecipientName}</strong>,</p>
 
@@ -102,6 +115,7 @@ function buildEmailTemplate({
     ${youtubeUrl && !captionContainsYoutubeUrl
             ? `<p style="margin-bottom: 16px;">Siaran ulang webinar dapat diakses di sini:<br><a href="${youtubeUrl}" style="color: #2563eb; text-decoration: underline;">${youtubeUrl}</a></p>`
             : ''}
+    ${captionHasClosing ? '' : signatureFooterHtml}
 `;
 
     const standardBodyHtml = `
@@ -119,13 +133,7 @@ function buildEmailTemplate({
         Nantikan informasi mengenai webinar dan acara inspiratif kami selanjutnya. Sampai jumpa di lain kesempatan!
     </p>
 
-    <p style="margin-bottom: 8px;">Hormat kami,</p>
-
-    <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid #eee;">
-        <p style="margin: 0; font-weight: bold;">${safeSenderName}</p>
-        <p style="margin: 4px 0; color: #555;">${safeSenderDepartment}</p>
-        ${safeSenderContact ? `<p style="margin: 4px 0; color: #555;">${safeSenderContact}</p>` : ''}
-    </div>
+    ${signatureFooterHtml}
 `;
 
     const html = `
