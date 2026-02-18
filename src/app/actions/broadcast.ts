@@ -327,13 +327,15 @@ export async function analyzeCertificateAction(formData: FormData) {
 
 export async function sendBroadcastAction({
     recipients,
+    defaultCertBuffer,
     caption,
     eventName,
     eventDate,
     sender,
     youtubeUrl,
 }: {
-    recipients: { name: string; email: string; certBuffer: number[] }[];
+    recipients: { name: string; email: string; certBuffer?: number[] }[];
+    defaultCertBuffer?: number[];
     caption: string;
     eventName: string;
     eventDate: string;
@@ -354,6 +356,7 @@ export async function sendBroadcastAction({
     // Validate input
     const validationResult = broadcastInputSchema.safeParse({
         recipients,
+        defaultCertBuffer,
         caption,
         eventName,
         eventDate,
@@ -375,12 +378,19 @@ export async function sendBroadcastAction({
     const safeEventDate = sanitizeHtml(eventDate);
 
     // Create Broadcast Session
+    const firstAvailableCertificate = recipients.find((recipient) => recipient.certBuffer && recipient.certBuffer.length > 0)?.certBuffer
+        || defaultCertBuffer;
+
+    if (!firstAvailableCertificate || firstAvailableCertificate.length === 0) {
+        throw new Error('Sertifikat tidak ditemukan. Upload file sertifikat default atau pastikan tiap penerima punya sertifikat.');
+    }
+
     const broadcast = await prisma.broadcast.create({
         data: {
             eventName: safeEventName,
             eventDate: safeEventDate,
             caption,
-            certificate: Buffer.from(recipients[0].certBuffer),
+            certificate: Buffer.from(firstAvailableCertificate),
         },
     });
 
@@ -412,7 +422,7 @@ export async function sendBroadcastAction({
                 subject,
                 html,
                 certificateFilename: `Sertifikat_${recipient.name.replace(/\s+/g, '_')}.pdf`,
-                certificate: Buffer.from(recipient.certBuffer),
+                certificate: Buffer.from(recipient.certBuffer && recipient.certBuffer.length > 0 ? recipient.certBuffer : firstAvailableCertificate),
                 status: 'pending',
                 scheduledFor,
                 broadcastId: broadcast.id,
@@ -448,6 +458,10 @@ export async function sendBroadcastAction({
         });
 
         try {
+            const certBuffer = recipient.certBuffer && recipient.certBuffer.length > 0
+                ? recipient.certBuffer
+                : firstAvailableCertificate;
+
             await sendCertificateEmail({
                 to: recipient.email,
                 subject,
@@ -455,7 +469,7 @@ export async function sendBroadcastAction({
                 attachments: [
                     {
                         filename: `Sertifikat_${recipient.name.replace(/\s+/g, '_')}.pdf`,
-                        content: Buffer.from(recipient.certBuffer),
+                        content: Buffer.from(certBuffer),
                     },
                 ],
             });

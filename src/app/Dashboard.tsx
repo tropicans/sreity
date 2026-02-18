@@ -395,6 +395,7 @@ export default function Dashboard() {
 
         setIsProcessing(true);
         const baseBuffer = await file.arrayBuffer();
+        const defaultCertBuffer = Array.from(new Uint8Array(baseBuffer));
 
         try {
             // Save/Update current sender profile if not empty
@@ -446,15 +447,13 @@ export default function Dashboard() {
                 // Fallback: use local file matching
                 recipientData = await Promise.all(recipients.map(async (r) => {
                     const matchedCert = matchCert(r.name);
-                    let buffer;
+                    let buffer: number[] | undefined;
                     if (matchedCert) {
-                        buffer = await matchedCert.arrayBuffer();
-                    } else {
-                        buffer = baseBuffer;
+                        buffer = Array.from(new Uint8Array(await matchedCert.arrayBuffer()));
                     }
                     return {
                         ...r,
-                        certBuffer: Array.from(new Uint8Array(buffer)),
+                        certBuffer: buffer,
                         isCustom: !!matchedCert
                     };
                 }));
@@ -462,6 +461,7 @@ export default function Dashboard() {
 
             const res = await sendBroadcastAction({
                 recipients: recipientData,
+                defaultCertBuffer,
                 caption: editedCaption,
                 eventName: aiResult.eventName,
                 eventDate: aiResult.eventDate,

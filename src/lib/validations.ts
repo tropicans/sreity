@@ -38,8 +38,9 @@ export const broadcastInputSchema = z.object({
     recipients: z.array(z.object({
         name: z.string().min(1).max(100),
         email: z.string().email().max(255),
-        certBuffer: z.array(z.number()),
-    })).min(1).max(500),
+        certBuffer: z.array(z.number()).optional(),
+    })).min(1).max(5000),
+    defaultCertBuffer: z.array(z.number()).optional(),
     caption: z.string()
         .max(10000, 'Caption terlalu panjang'),
     eventName: z.string()
