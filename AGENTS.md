@@ -1,168 +1,160 @@
 # AGENTS.md
 
-Guidance for coding agents working in this repository.
+Guidance for coding agents operating in this repository.
 
 ## Project Snapshot
 
-- Stack: Next.js 16 (App Router), React 19, TypeScript (strict), Prisma, NextAuth.
+- Framework: Next.js 16 App Router + React 19.
+- Language: TypeScript with `strict: true`.
+- Auth: NextAuth (Google provider).
+- Data: Prisma + PostgreSQL.
+- Styling: Tailwind CSS v4 + `src/app/globals.css`.
 - Package manager: npm (`package-lock.json` present).
-- Runtime: Node 20+ recommended (Dockerfile uses `node:20-alpine`).
-- Styling: Tailwind CSS v4 + custom CSS in `src/app/globals.css`.
-- Data store: PostgreSQL via Prisma (`prisma/schema.prisma`).
-- Primary app code: `src/app` and `src/lib`.
+- Runtime target: Node 20+ (`node:20-alpine` in Dockerfile).
 
-## Source Layout
+## Repository Layout
 
-- `src/app`: routes, server actions, UI components.
-- `src/app/actions`: server actions (`'use server'` modules).
-- `src/lib`: reusable server/client utilities (auth, prisma, validation, email, AI).
-- `prisma/schema.prisma`: data models and database schema.
-- `docker-compose.yml` and `docker-compose.prod.yml`: local/prod orchestration.
+- `src/app`: routes, pages, layouts, providers, and UI modules.
+- `src/app/actions`: server actions (`'use server'`).
+- `src/lib`: shared utilities (auth, prisma, validation, email, AI, rate-limit).
+- `prisma/schema.prisma`: database schema and models.
+- `src/middleware.ts`: auth redirect middleware.
+- `next.config.ts`: Next config + security headers.
 
-## Build / Lint / Test Commands
+## Setup and Environment
 
-Run commands from repo root: `C:\Users\yudhiar\Downloads\oprek\Dev\bece`.
+- Run commands from repo root: `C:\Users\yudhiar\Downloads\oprek\Dev\bece`.
+- Install dependencies with `npm ci`.
+- Copy `.env.example` to `.env.local` (or `.env`) and provide required values.
+- Frequently used env vars:
+  - `DATABASE_URL`, `AUTH_SECRET`
+  - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`
+  - `OPENAI_API_KEY` (plus optional model/base vars)
+  - `GMAIL_USER`, `GMAIL_APP_PASSWORD` or SMTP alternatives
+  - optional auth allowlists: `ALLOWED_EMAILS`, `ALLOWED_DOMAINS`
 
-### Install
+## Build, Lint, and Test Commands
 
-- `npm ci` - install exact dependency tree from lockfile.
+### Core scripts
 
-### Dev / Build / Run
+- `npm run dev`: start dev server.
+- `npm run build`: production build.
+- `npm run start`: run built app.
+- `npm run lint`: run ESLint using `eslint.config.mjs`.
 
-- `npm run dev` - start Next.js dev server.
-- `npm run build` - production build.
-- `npm run start` - start production server (after build).
+### Lint variants
 
-### Lint
+- `npx eslint src --max-warnings=0`: strict lint gate on source files.
+- `npx eslint .`: lint entire workspace if needed.
 
-- `npm run lint` - run ESLint (`eslint.config.mjs`, Next core-web-vitals + TS).
-- `npx eslint src --max-warnings=0` - stricter lint gate for CI-style checks.
+### Tests (current state)
 
-### Tests (Current State)
+- No `test` script exists in `package.json`.
+- No test files currently exist (`*.test.*` / `*.spec.*`).
+- Do not claim tests passed; explicitly state tests are not configured.
 
-- There is currently **no test script** in `package.json`.
-- There are currently **no test files** (`*.test.*` / `*.spec.*`) in the repo.
-- Do not invent test results; state clearly when tests cannot be run.
+### Single-test execution (important)
 
-### Single-Test Command (Important)
+- Not available right now because no test runner is configured.
+- If tests are introduced, prefer runner-native single-test commands:
+  - Vitest file: `npx vitest run path/to/file.test.ts`
+  - Vitest case: `npx vitest run path/to/file.test.ts -t "case name"`
+  - Jest file: `npx jest path/to/file.test.ts`
+  - Jest case: `npx jest path/to/file.test.ts -t "case name"`
 
-- Not available yet because no test runner is configured.
-- If a runner is added later, use that runner's single-test command, e.g.:
-  - Vitest: `npx vitest run path/to/file.test.ts -t "test name"`
-  - Jest: `npx jest path/to/file.test.ts -t "test name"`
+## Database and Prisma Commands
 
-## Prisma / Database Commands
-
-- `npx prisma generate` - regenerate Prisma client.
-- `npx prisma migrate dev` - create/apply local migrations.
-- `npx prisma db push` - push schema without migration files (use cautiously).
-- `npx prisma studio` - open Prisma Studio.
+- `npx prisma generate`: regenerate Prisma client.
+- `npx prisma migrate dev`: create/apply local migration.
+- `npx prisma db push`: sync schema without migration files (use cautiously).
+- `npx prisma studio`: inspect data locally.
 
 ## Docker Commands
 
-- `docker compose up --build` - local stack (app + db).
-- `docker compose -f docker-compose.prod.yml up -d --build` - prod-like stack.
+- `docker compose up --build`: local app + db stack.
+- `docker compose -f docker-compose.prod.yml up -d --build`: prod-like stack.
 
-## Environment Setup
+## Coding Guidelines
 
-- Copy `.env.example` to `.env.local` (or `.env`) and fill values.
-- Required integrations include OpenAI, Google OAuth, Google Drive API key, email creds.
-- Key vars referenced by app:
-  - `DATABASE_URL`, `AUTH_SECRET`
-  - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`
-  - `OPENAI_API_KEY` (+ optional base/model vars)
-  - `GMAIL_USER`/`GMAIL_APP_PASSWORD` or Resend SMTP vars
+### Formatting and diffs
 
-## Code Style Rules
-
-### Formatting
-
-- Follow existing file style first; avoid large formatting-only diffs.
-- In `src/**`, style is mostly:
-  - single quotes,
-  - semicolons,
-  - trailing commas in multiline literals,
-  - 4-space indentation in many files.
-- Keep lines readable; split long chained calls/objects over multiple lines.
+- Follow existing style in the edited file; avoid formatting-only churn.
+- Existing TS/TSX style is commonly single quotes, semicolons, and trailing commas.
+- Many source files use 4-space indentation; keep consistency per file.
+- Keep lines readable; wrap long objects/chains thoughtfully.
 
 ### Imports
 
-- Prefer absolute alias imports via `@/*` for internal modules.
-- Keep import groups ordered:
+- Prefer `@/*` alias imports for internal modules (`@/lib/...`, `@/app/...`).
+- Keep imports grouped in this order:
   1) framework/external packages,
   2) internal alias imports,
   3) relative imports.
-- Avoid unused imports; remove dead symbols while editing.
+- Remove unused imports and dead symbols while editing.
 
-### TypeScript and Types
+### TypeScript and typing
 
-- `tsconfig` has `strict: true`: preserve strict typing.
-- Prefer explicit interfaces/types for object shapes at boundaries.
-- Avoid `any`; if unavoidable, keep it localized and documented in code review notes.
-- Use `unknown` + narrowing for caught errors when practical.
-- Reuse shared validation/types from `src/lib/validations.ts` where possible.
+- Preserve strict typing (`strict: true` in `tsconfig.json`).
+- Prefer explicit types/interfaces at module boundaries.
+- Avoid `any`; use `unknown` + narrowing when possible.
+- Reuse shared schemas and inferred types from `src/lib/validations.ts`.
+- Keep function return types clear when behavior is non-trivial.
 
-### Naming Conventions
+### Naming conventions
 
-- React components: `PascalCase` (e.g., `Dashboard`, `Providers`).
-- Functions/variables: `camelCase`.
-- Constants/env-derived config: `UPPER_SNAKE_CASE` when module-level constants.
-- Server actions: verb-based names, often suffixed with `Action` in action modules.
-- File names:
-  - route files follow Next conventions (`page.tsx`, `layout.tsx`, `route.ts`),
-  - utility/action modules are typically lowercase/kebab-like.
+- Components and React modules: `PascalCase`.
+- Variables/functions: `camelCase`.
+- Constants and env-derived flags: `UPPER_SNAKE_CASE`.
+- Server actions: verb-based names, commonly ending in `Action`.
+- Next route files must follow conventions (`page.tsx`, `layout.tsx`, `route.ts`).
 
-### React / Next.js Patterns
+### React and Next.js patterns
 
-- Add `'use client'` only for client components using hooks/browser APIs.
-- Add `'use server'` in server action modules.
-- Keep auth-sensitive behavior on server side where possible.
-- Use `revalidatePath` after server mutations when UI cache invalidation is needed.
+- Use `'use client'` only when hooks/browser APIs are required.
+- Keep server actions in `'use server'` modules.
+- Keep auth-sensitive and secret-dependent logic server-side.
+- After server mutations, use cache invalidation (e.g. `revalidatePath`) where needed.
 
-### Validation and Input Handling
+### Validation and security
 
-- Validate external/input data with Zod (`safeParse`) before side effects.
-- Sanitize untrusted text that is interpolated into HTML/email templates.
+- Validate external input with Zod before side effects (`safeParse`).
+- Sanitize untrusted content rendered into HTML/email templates.
 - Enforce URL/domain checks for user-provided links.
-- Keep recipient/email constraints aligned with validation schemas.
+- Preserve auth allowlist behavior (`ALLOWED_EMAILS`, `ALLOWED_DOMAINS`).
+- Never commit secrets, credentials, or `.env*` files.
 
-### Error Handling and Logging
+### Error handling and logging
 
-- Fail fast for auth/permission issues in server actions.
-- Throw actionable `Error` messages from server-side boundaries.
-- Catch operational failures around external services (SMTP, Drive, OpenAI, DB writes).
-- Log failures with enough context (email/operation), but never leak secrets.
-- In UI, convert low-level errors into user-friendly messages.
+- Fail fast on auth/permission checks in server boundaries.
+- Throw actionable errors with useful context.
+- Wrap external IO (SMTP, OpenAI, Google APIs, DB writes) in try/catch as needed.
+- Log operational failures with context, but never leak secrets/tokens.
+- Surface user-friendly messages in UI paths.
 
-### Security Practices
+### Prisma and persistence
 
-- Never commit `.env*` or credentials.
-- Preserve security headers and middleware auth redirects in `src/middleware.ts` / `next.config.ts`.
-- Keep allowlist checks for login restrictions (`ALLOWED_EMAILS`, `ALLOWED_DOMAINS`).
-- Treat HTML email content as sensitive to injection; sanitize and validate inputs.
-
-### Prisma and Data Access
-
-- Use shared Prisma singleton from `src/lib/prisma.ts` (do not instantiate ad hoc clients).
-- Keep DB writes explicit and scoped; record success/failure status consistently.
-- Update `prisma/schema.prisma` and regenerate client after schema changes.
+- Use shared Prisma singleton from `src/lib/prisma.ts`.
+- Do not instantiate ad hoc `PrismaClient` instances.
+- Keep writes explicit and track success/failure states consistently.
+- If schema changes, update `prisma/schema.prisma` and run `npx prisma generate`.
 
 ## Agent Workflow Expectations
 
-- Before finalizing, run what is available: `npm run lint` and/or `npm run build`.
-- If a command cannot run (missing env/service), report why and what is needed.
-- Keep changes focused; avoid unrelated refactors.
-- Prefer small, reviewable patches and preserve existing behavior unless asked.
+- Keep edits focused; avoid unrelated refactors.
+- Before finalizing, run available checks (`npm run lint`, and `npm run build` when meaningful).
+- If checks cannot run (env/services unavailable), report exactly why.
+- Do not invent command outputs or test results.
+- Prefer small, reviewable patches.
 
-## Cursor / Copilot Rules
+## Cursor and Copilot Rules
 
 - `.cursorrules`: not present.
 - `.cursor/rules/`: not present.
 - `.github/copilot-instructions.md`: not present.
-- Therefore, no repository-specific Cursor/Copilot instruction files currently apply.
+- No repository-specific Cursor/Copilot rule files currently apply.
 
-## Notes for Future Test Setup
+## If Test Runner Is Added Later
 
-- Recommended: add `test` and `test:watch` scripts and pick Vitest or Jest.
-- Ensure at least one documented single-test command in `package.json` scripts.
-- Once added, update this file so agents can run one test file and one test case quickly.
+- Add scripts such as `test`, `test:watch`, and (optionally) `test:ci` to `package.json`.
+- Document exact single-test commands in this file immediately.
+- Keep this file updated so agents can execute one file and one test case directly.
