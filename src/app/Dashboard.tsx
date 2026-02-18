@@ -45,6 +45,7 @@ export default function Dashboard() {
     const [recipientsText, setRecipientsText] = useState('');
     const [isProcessing, setIsProcessing] = useState(false);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
+    const [analyzeProgress, setAnalyzeProgress] = useState(0);
     const [aiResult, setAiResult] = useState<AiResult | null>(null);
     const [editedCaption, setEditedCaption] = useState('');
     const [senderProfiles, setSenderProfiles] = useState<SenderProfile[]>([]);
@@ -306,6 +307,20 @@ export default function Dashboard() {
         if (!file) return;
 
         setIsAnalyzing(true);
+        setAnalyzeProgress(3);
+
+        let progressTimer: ReturnType<typeof setInterval> | null = null;
+        progressTimer = setInterval(() => {
+            setAnalyzeProgress((prev) => {
+                if (prev >= 92) {
+                    return prev;
+                }
+
+                const jump = prev < 25 ? 7 : prev < 60 ? 4 : 2;
+                return Math.min(prev + jump, 92);
+            });
+        }, 450);
+
         const formData = new FormData();
         formData.append('certificate', file);
 
@@ -313,11 +328,16 @@ export default function Dashboard() {
             const res = await analyzeCertificateAction(formData) as AiResult;
             setAiResult(res);
             setEditedCaption(res.caption);
+            setAnalyzeProgress(100);
         } catch (error) {
             console.error('Analysis failed:', error);
             alert('Gagal menganalisis sertifikat.');
         } finally {
+            if (progressTimer) {
+                clearInterval(progressTimer);
+            }
             setIsAnalyzing(false);
+            setTimeout(() => setAnalyzeProgress(0), 500);
         }
     };
 
@@ -667,18 +687,34 @@ export default function Dashboard() {
                             )}
 
                             {file && !aiResult && (
-                                <button
-                                    onClick={(e) => { e.stopPropagation(); handleAnalyze(); }}
-                                    disabled={isAnalyzing}
-                                    className="absolute bottom-8 apple-button shadow-2xl flex items-center gap-2 group"
-                                >
-                                    {isAnalyzing ? <Loader2 className="animate-spin w-5 h-5" /> : (
-                                        <>
-                                            Analyze with AI
-                                            <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
-                                        </>
+                                <div className="absolute bottom-8 w-[min(380px,90%)] space-y-3">
+                                    <button
+                                        onClick={(e) => { e.stopPropagation(); handleAnalyze(); }}
+                                        disabled={isAnalyzing}
+                                        className="apple-button w-full shadow-2xl flex items-center justify-center gap-2 group"
+                                    >
+                                        {isAnalyzing ? (
+                                            <>
+                                                <Loader2 className="animate-spin w-5 h-5" />
+                                                Analyzing... {analyzeProgress}%
+                                            </>
+                                        ) : (
+                                            <>
+                                                Analyze with AI
+                                                <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+                                            </>
+                                        )}
+                                    </button>
+
+                                    {isAnalyzing && (
+                                        <div className="w-full bg-white/10 rounded-full h-2 overflow-hidden">
+                                            <div
+                                                className="h-full bg-gradient-to-r from-[#66b6ff] to-[#2997ff] transition-all duration-300"
+                                                style={{ width: `${analyzeProgress}%` }}
+                                            />
+                                        </div>
                                     )}
-                                </button>
+                                </div>
                             )}
 
                             {/* Bulk Files Status */}

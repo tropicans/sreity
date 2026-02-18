@@ -17,17 +17,19 @@ type EmailTemplateInput = {
 };
 
 function normalizeCaption(text: string): string {
-    const normalized = text.replace(/\r\n/g, '\n').trim();
-    if (!normalized) {
+    const rawNormalized = text.replace(/\r\n/g, '\n').trim();
+    if (!rawNormalized) {
         return '';
     }
 
-    const duplicatedWholeText = normalized.match(/^([\s\S]{40,}?)\s+\1$/);
+    const duplicatedWholeText = rawNormalized.match(/^([\s\S]{40,}?)\s+\1$/);
     if (duplicatedWholeText) {
-        return duplicatedWholeText[1].trim();
+        return duplicatedWholeText[1]
+            .trim()
+            .replace(/([.!?])\s+(?=(salam\s+hormat|hormat\s+kami|hormat\s+saya)\b)/gi, '$1\n\n');
     }
 
-    const paragraphs = normalized
+    const paragraphs = rawNormalized
         .split(/\n{2,}/)
         .map((part) => part.trim())
         .filter(Boolean);
@@ -38,52 +40,56 @@ function normalizeCaption(text: string): string {
         const secondHalf = paragraphs.slice(half);
         const isDuplicated = firstHalf.every((part, index) => part === secondHalf[index]);
         if (isDuplicated) {
-            return firstHalf.join('\n\n');
+            return firstHalf
+                .join('\n\n')
+                .replace(/([.!?])\s+(?=(salam\s+hormat|hormat\s+kami|hormat\s+saya)\b)/gi, '$1\n\n');
         }
     }
 
-    return normalized;
+    return rawNormalized.replace(/([.!?])\s+(?=(salam\s+hormat|hormat\s+kami|hormat\s+saya)\b)/gi, '$1\n\n');
 }
 
-function getYoutubeVideoId(url: string): string | null {
-    try {
-        const parsed = new URL(url);
-        const host = parsed.hostname.toLowerCase();
-
-        if (host === 'youtu.be') {
-            const id = parsed.pathname.split('/').filter(Boolean)[0];
-            return id || null;
-        }
-
-        if (host === 'youtube.com' || host === 'www.youtube.com') {
-            const id = parsed.searchParams.get('v');
-            return id || null;
-        }
-    } catch {
-        return null;
-    }
-
-    return null;
-}
-
-function buildYoutubePreviewHtml(youtubeUrl?: string): string {
+function buildYoutubeLinkHtml(youtubeUrl?: string): string {
     if (!youtubeUrl) {
         return '';
     }
 
-    const videoId = getYoutubeVideoId(youtubeUrl);
-    if (!videoId) {
-        return `<p style="margin-bottom: 16px;">Siaran ulang webinar dapat diakses di sini:<br><a href="${youtubeUrl}" style="color: #2563eb; text-decoration: underline;">${youtubeUrl}</a></p>`;
+    return `<p style="margin-bottom: 16px;">Siaran ulang webinar dapat diakses di sini:<br><a href="${youtubeUrl}" style="color: #2563eb; text-decoration: underline;">${youtubeUrl}</a></p>`;
+}
+
+function splitCaptionClosing(text: string): { bodyText: string; closingText: string } {
+    const closingPattern = /(?:^|\n{2,})(salam\s+hormat|hormat\s+kami|hormat\s+saya)\b[\s\S]*$/i;
+    const match = text.match(closingPattern);
+    if (!match || typeof match.index !== 'number') {
+        return { bodyText: text, closingText: '' };
     }
 
-    const thumbnailUrl = `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
+    const index = match.index;
+    if (index < text.length * 0.35) {
+        return { bodyText: text, closingText: '' };
+    }
+
+    return {
+        bodyText: text.slice(0, index).trim(),
+        closingText: text.slice(index).trim(),
+    };
+}
+
+function formatClosingHtml(closingText: string): string {
+    if (!closingText) {
+        return '';
+    }
+
+    const normalized = closingText
+        .replace(/\r\n/g, '\n')
+        .replace(/,\s+/g, ',\n')
+        .replace(/(.+?)\s+(\+?\d[\d\s-]{7,})$/, '$1\n$2');
+
+    const safeClosing = sanitizeHtml(normalized).replace(/\n/g, '<br/>');
+
     return `
-    <div style="margin: 16px 0 22px;">
-        <p style="margin-bottom: 10px;">Siaran ulang webinar dapat diakses di sini:</p>
-        <a href="${youtubeUrl}" style="text-decoration: none; display: inline-block;">
-            <img src="${thumbnailUrl}" alt="YouTube Preview" style="display: block; width: 100%; max-width: 560px; border-radius: 10px; border: 1px solid #d1d5db;" />
-            <p style="margin: 8px 0 0; color: #2563eb; text-decoration: underline; font-size: 13px;">${youtubeUrl}</p>
-        </a>
+    <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid #eee;">
+        <p style="margin: 0; color: #333;">${safeClosing}</p>
     </div>`;
 }
 
@@ -120,7 +126,8 @@ function buildEmailTemplate({
     const hasCustomCaption = personalizedCaption.trim().length > 0;
     const captionContainsYoutubeUrl = !!youtubeUrl && personalizedCaption.includes(youtubeUrl);
     const captionHasClosing = /\b(hormat\s+kami|salam\s+hormat|hormat\s+saya)\b/i.test(personalizedCaption);
-    const youtubePreviewHtml = buildYoutubePreviewHtml(youtubeUrl);
+    const youtubeLinkHtml = buildYoutubeLinkHtml(youtubeUrl);
+    const { bodyText: customCaptionBody, closingText: customCaptionClosing } = splitCaptionClosing(personalizedCaption);
 
     const formatCaptionParagraphs = (text: string): string => {
         const normalized = text.replace(/\r\n/g, '\n').trim();
@@ -164,7 +171,8 @@ function buildEmailTemplate({
             .join('\n');
     };
 
-    const formattedCaptionHtml = formatCaptionParagraphs(personalizedCaption);
+    const formattedCaptionHtml = formatCaptionParagraphs(customCaptionBody);
+    const formattedCustomClosingHtml = formatClosingHtml(customCaptionClosing);
 
     const signatureFooterHtml = `
     <p style="margin-bottom: 8px;">Hormat kami,</p>
@@ -192,8 +200,8 @@ function buildEmailTemplate({
 
     const customBodyHtml = `
     ${formattedCaptionHtml}
-    ${youtubeUrl && !captionContainsYoutubeUrl ? youtubePreviewHtml : ''}
-    ${captionHasClosing ? '' : signatureFooterHtml}
+    ${youtubeUrl && !captionContainsYoutubeUrl ? youtubeLinkHtml : ''}
+    ${formattedCustomClosingHtml || (captionHasClosing ? '' : signatureFooterHtml)}
 `;
 
     const standardBodyHtml = `
@@ -204,14 +212,14 @@ function buildEmailTemplate({
     </p>
 
     <p style="margin-bottom: 16px;">
-        Semoga ilmu dan wawasan yang dibagikan oleh para narasumber dapat bermanfaat dalam mendukung tugas dan fungsi Bapak/Ibu.${youtubeUrl ? ` Apabila Anda ingin menyaksikan kembali acara tersebut, siaran ulang dapat diakses melalui tautan berikut:<br><a href="${youtubeUrl}" style="color: #2563eb; text-decoration: underline;">${youtubeUrl}</a>` : ''}
+        Semoga ilmu dan wawasan yang dibagikan oleh para narasumber dapat bermanfaat dalam mendukung tugas dan fungsi Bapak/Ibu.
     </p>
 
     <p style="margin-bottom: 16px;">
         Nantikan informasi mengenai webinar dan acara inspiratif kami selanjutnya. Sampai jumpa di lain kesempatan!
     </p>
 
-    ${youtubePreviewHtml}
+    ${youtubeLinkHtml}
 
     ${signatureFooterHtml}
 `;
