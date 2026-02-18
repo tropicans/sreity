@@ -114,14 +114,17 @@ function splitCaptionClosing(text: string): { bodyText: string; closingText: str
     };
 }
 
-function formatClosingHtml(closingText: string, senderContact?: string): string {
+function formatClosingHtml(closingText: string, senderName?: string, senderContact?: string): string {
     if (!closingText) {
         return '';
     }
 
+    const name = (senderName || '').trim();
     const contact = (senderContact || '').trim();
     const normalizedClosing = closingText.toLowerCase().replace(/\s+/g, '');
+    const normalizedName = name.toLowerCase().replace(/\s+/g, '');
     const normalizedContact = contact.toLowerCase().replace(/\s+/g, '');
+    const hasNameInClosing = !!name && normalizedClosing.includes(normalizedName);
     const hasContactInClosing = !!contact && normalizedClosing.includes(normalizedContact);
 
     const normalized = closingText
@@ -130,9 +133,13 @@ function formatClosingHtml(closingText: string, senderContact?: string): string 
         .replace(/(.+?)\s+(\+?\d[\d\s-]{7,})$/, '$1\n$2')
         .trim();
 
-    const withContact = !hasContactInClosing && contact
-        ? `${normalized}\n${contact}`
+    const withName = !hasNameInClosing && name
+        ? `${normalized}\n${name}`
         : normalized;
+
+    const withContact = !hasContactInClosing && contact
+        ? `${withName}\n${contact}`
+        : withName;
 
     const safeClosing = sanitizeHtml(withContact).replace(/\n/g, '<br/>');
 
@@ -221,7 +228,7 @@ function buildEmailTemplate({
     };
 
     const formattedCaptionHtml = formatCaptionParagraphs(customCaptionBody);
-    const formattedCustomClosingHtml = formatClosingHtml(customCaptionClosing, sender.contact);
+    const formattedCustomClosingHtml = formatClosingHtml(customCaptionClosing, sender.name, sender.contact);
 
     const signatureFooterHtml = `
     <p style="margin-bottom: 8px;">Hormat kami,</p>
