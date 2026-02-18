@@ -67,6 +67,12 @@ export default function Dashboard() {
     const [emailPreviewHtml, setEmailPreviewHtml] = useState('');
     const [emailPreviewSubject, setEmailPreviewSubject] = useState('');
     const { data: session } = useSession();
+    const deliveredCount = results?.filter((r) => r.status === 'success').length ?? 0;
+    const failedCount = results?.filter((r) => r.status === 'failed').length ?? 0;
+    const pendingCount = results?.filter((r) => r.status === 'pending').length ?? 0;
+    const successRate = results && results.length > 0
+        ? Math.round((deliveredCount / results.length) * 100)
+        : 0;
 
     const onDrop = (acceptedFiles: File[]) => {
         const images = acceptedFiles.filter(f => f.type.startsWith('image/'));
@@ -928,19 +934,28 @@ export default function Dashboard() {
                                     <div className="p-12 grid grid-cols-1 md:grid-cols-3 gap-12 border-b border-white/5">
                                         <div className="space-y-2">
                                             <span className="text-[#86868b] text-[10px] font-bold uppercase tracking-widest text-center block">Delivered</span>
-                                            <span className="text-5xl font-semibold block text-center text-[#30d158]">{results.filter((r) => r.status === 'success').length}</span>
+                                            <span className="text-5xl font-semibold block text-center text-[#30d158]">{deliveredCount}</span>
                                         </div>
                                         <div className="space-y-2">
                                             <span className="text-[#86868b] text-[10px] font-bold uppercase tracking-widest text-center block">Bounced</span>
-                                            <span className="text-5xl font-semibold block text-center text-[#ff453a]">{results.filter((r) => r.status === 'failed').length}</span>
+                                            <span className="text-5xl font-semibold block text-center text-[#ff453a]">{failedCount}</span>
                                         </div>
                                         <div className="space-y-2">
+                                            <span className="text-[#86868b] text-[10px] font-bold uppercase tracking-widest text-center block">Pending</span>
+                                            <span className="text-5xl font-semibold block text-center text-[#ff9f0a]">{pendingCount}</span>
+                                        </div>
+                                        <div className="space-y-2 md:col-span-3 border-t border-white/5 pt-6">
                                             <span className="text-[#86868b] text-[10px] font-bold uppercase tracking-widest text-center block">Success Rate</span>
-                                            <span className="text-5xl font-semibold block text-center">
-                                                {Math.round((results.filter((r) => r.status === 'success').length / results.length) * 100)}%
+                                            <span className="text-4xl font-semibold block text-center">
+                                                {successRate}%
                                             </span>
                                         </div>
                                     </div>
+                                    {pendingCount > 0 && (
+                                        <div className="px-12 py-4 border-b border-white/5 bg-[#ff9f0a]/10 text-[#ffd8a1] text-xs text-center">
+                                            {pendingCount} email masuk antrian pending dan akan diproses otomatis saat endpoint cron dijalankan.
+                                        </div>
+                                    )}
 
                                     <div className="max-h-96 overflow-y-auto">
                                         <table className="w-full text-left text-sm">
@@ -949,7 +964,7 @@ export default function Dashboard() {
                                                     <tr key={i} className="hover:bg-white/[0.02] transition-colors">
                                                         <td className="px-12 py-5 font-medium">{r.email}</td>
                                                         <td className="px-12 py-5 text-right">
-                                                            <span className={`text-[10px] font-bold uppercase tracking-widest ${r.status === 'success' ? 'text-[#30d158]' : 'text-[#ff453a]'}`}>
+                                                            <span className={`text-[10px] font-bold uppercase tracking-widest ${r.status === 'success' ? 'text-[#30d158]' : r.status === 'pending' ? 'text-[#ff9f0a]' : 'text-[#ff453a]'}`}>
                                                                 {r.status}
                                                             </span>
                                                         </td>

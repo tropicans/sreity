@@ -16,6 +16,9 @@ type EmailTemplateInput = {
     youtubeUrl?: string;
 };
 
+const GMAIL_SAFE_DAILY_LIMIT_DEFAULT = 450;
+const GMAIL_PENDING_DELAY_HOURS_DEFAULT = 24;
+
 function normalizeCaption(text: string): string {
     const rawNormalized = text.replace(/\r\n/g, '\n').trim();
     if (!rawNormalized) {
@@ -252,6 +255,16 @@ async function ensureAuthenticatedUser() {
     return session.user;
 }
 
+function getGmailSafeDailyLimit() {
+    const parsed = parseInt(process.env.GMAIL_DAILY_SAFE_LIMIT || `${GMAIL_SAFE_DAILY_LIMIT_DEFAULT}`, 10);
+    return Number.isNaN(parsed) || parsed < 1 ? GMAIL_SAFE_DAILY_LIMIT_DEFAULT : parsed;
+}
+
+function getPendingDelayHours() {
+    const parsed = parseInt(process.env.GMAIL_PENDING_DELAY_HOURS || `${GMAIL_PENDING_DELAY_HOURS_DEFAULT}`, 10);
+    return Number.isNaN(parsed) || parsed < 1 ? GMAIL_PENDING_DELAY_HOURS_DEFAULT : parsed;
+}
+
 function validatePreviewInput({
     recipient,
     caption,
@@ -330,14 +343,7 @@ export async function sendBroadcastAction({
     const user = await ensureAuthenticatedUser();
 
     const emailProvider = (process.env.EMAIL_PROVIDER || 'gmail').toLowerCase();
-    const gmailSafeDailyLimit = parseInt(process.env.GMAIL_DAILY_SAFE_LIMIT || '450', 10);
-
-    if (emailProvider === 'gmail' && recipients.length > gmailSafeDailyLimit) {
-        throw new Error(
-            `Jumlah penerima (${recipients.length}) melebihi batas aman Gmail per batch (${gmailSafeDailyLimit}). ` +
-            'Silakan kirim bertahap (mis. 300-450 per hari) untuk menghindari suspend/limit Gmail.',
-        );
-    }
+    const gmailSafeDailyLimit = getGmailSafeDailyLimit();
 
     // Rate limit check
     const rateLimitResult = checkRateLimit(user.id || user.email || 'anonymous', RATE_LIMITS.broadcast);
@@ -380,7 +386,58 @@ export async function sendBroadcastAction({
 
     const results = [];
 
-    for (const recipient of recipients) {
+    const immediateRecipients = emailProvider === 'gmail'
+        ? recipients.slice(0, gmailSafeDailyLimit)
+        : recipients;
+    const pendingRecipients = emailProvider === 'gmail'
+        ? recipients.slice(gmailSafeDailyLimit)
+        : [];
+
+    if (pendingRecipients.length > 0) {
+        const scheduledFor = new Date(Date.now() + getPendingDelayHours() * 60 * 60 * 1000);
+
+        const pendingEmailRows = pendingRecipients.map((recipient) => {
+            const { subject, html } = buildEmailTemplate({
+                recipientName: recipient.name,
+                caption,
+                eventName,
+                eventDate,
+                sender,
+                youtubeUrl,
+            });
+
+            return {
+                name: recipient.name,
+                email: recipient.email,
+                subject,
+                html,
+                certificateFilename: `Sertifikat_${recipient.name.replace(/\s+/g, '_')}.pdf`,
+                certificate: Buffer.from(recipient.certBuffer),
+                status: 'pending',
+                scheduledFor,
+                broadcastId: broadcast.id,
+            };
+        });
+
+        await prisma.pendingEmail.createMany({
+            data: pendingEmailRows,
+        });
+
+        await prisma.recipient.createMany({
+            data: pendingRecipients.map((recipient) => ({
+                name: recipient.name,
+                email: recipient.email,
+                status: 'pending',
+                broadcastId: broadcast.id,
+            })),
+        });
+
+        for (const recipient of pendingRecipients) {
+            results.push({ email: recipient.email, status: 'pending' });
+        }
+    }
+
+    for (const recipient of immediateRecipients) {
         const { subject, html } = buildEmailTemplate({
             recipientName: recipient.name,
             caption,
@@ -431,7 +488,7 @@ export async function sendBroadcastAction({
         }
 
         // Add delay between emails to avoid rate limiting
-        if (recipients.indexOf(recipient) < recipients.length - 1) {
+        if (immediateRecipients.indexOf(recipient) < immediateRecipients.length - 1) {
             await delay(getEmailDelay());
         }
     }
