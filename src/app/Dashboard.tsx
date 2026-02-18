@@ -422,25 +422,36 @@ export default function Dashboard() {
                 }
 
                 recipientData = await Promise.all(driveMatches.map(async (match) => {
-                    let buffer;
+                    let buffer: number[];
+                    let isCustom = false;
                     if (match.fileId) {
                         const driveBuffer = await downloadDriveFile(match.fileId);
-                        if (!driveBuffer) {
-                            throw new Error(`Gagal mengunduh sertifikat dari Google Drive untuk ${match.name}`);
+                        if (driveBuffer) {
+                            buffer = Array.from(driveBuffer);
+                            isCustom = true;
+                        } else {
+                            const matchedLocalCert = matchCert(match.name);
+                            if (matchedLocalCert) {
+                                buffer = Array.from(new Uint8Array(await matchedLocalCert.arrayBuffer()));
+                                isCustom = true;
+                            } else {
+                                buffer = defaultCertBuffer;
+                            }
                         }
-                        buffer = Array.from(driveBuffer);
                     } else {
                         const matchedCert = matchCert(match.name);
-                        if (!matchedCert) {
-                            throw new Error(`Sertifikat tidak ditemukan untuk ${match.name}`);
+                        if (matchedCert) {
+                            buffer = Array.from(new Uint8Array(await matchedCert.arrayBuffer()));
+                            isCustom = true;
+                        } else {
+                            buffer = defaultCertBuffer;
                         }
-                        buffer = Array.from(new Uint8Array(await matchedCert.arrayBuffer()));
                     }
                     return {
                         name: match.name,
                         email: match.email,
                         certBuffer: buffer,
-                        isCustom: !!match.fileId
+                        isCustom,
                     };
                 }));
             } else {

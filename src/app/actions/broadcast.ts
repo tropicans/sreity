@@ -18,6 +18,7 @@ type EmailTemplateInput = {
 
 const GMAIL_SAFE_DAILY_LIMIT_DEFAULT = 450;
 const GMAIL_PENDING_DELAY_HOURS_DEFAULT = 24;
+const GMAIL_IMMEDIATE_BATCH_LIMIT_DEFAULT = 20;
 
 function normalizeCaption(text: string): string {
     const rawNormalized = text.replace(/\r\n/g, '\n').trim();
@@ -318,6 +319,11 @@ function getPendingDelayHours() {
     return Number.isNaN(parsed) || parsed < 1 ? GMAIL_PENDING_DELAY_HOURS_DEFAULT : parsed;
 }
 
+function getImmediateBatchLimit() {
+    const parsed = parseInt(process.env.GMAIL_IMMEDIATE_BATCH_LIMIT || `${GMAIL_IMMEDIATE_BATCH_LIMIT_DEFAULT}`, 10);
+    return Number.isNaN(parsed) || parsed < 1 ? GMAIL_IMMEDIATE_BATCH_LIMIT_DEFAULT : parsed;
+}
+
 function validatePreviewInput({
     recipient,
     caption,
@@ -449,11 +455,14 @@ export async function sendBroadcastAction({
 
     const results = [];
 
+    const immediateBatchLimit = getImmediateBatchLimit();
+    const immediateSendCount = Math.min(gmailSafeDailyLimit, immediateBatchLimit);
+
     const immediateRecipients = emailProvider === 'gmail'
-        ? recipients.slice(0, gmailSafeDailyLimit)
+        ? recipients.slice(0, immediateSendCount)
         : recipients;
     const pendingRecipients = emailProvider === 'gmail'
-        ? recipients.slice(gmailSafeDailyLimit)
+        ? recipients.slice(immediateSendCount)
         : [];
 
     if (pendingRecipients.length > 0) {
