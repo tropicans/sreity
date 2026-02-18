@@ -16,6 +16,77 @@ type EmailTemplateInput = {
     youtubeUrl?: string;
 };
 
+function normalizeCaption(text: string): string {
+    const normalized = text.replace(/\r\n/g, '\n').trim();
+    if (!normalized) {
+        return '';
+    }
+
+    const duplicatedWholeText = normalized.match(/^([\s\S]{40,}?)\s+\1$/);
+    if (duplicatedWholeText) {
+        return duplicatedWholeText[1].trim();
+    }
+
+    const paragraphs = normalized
+        .split(/\n{2,}/)
+        .map((part) => part.trim())
+        .filter(Boolean);
+
+    if (paragraphs.length >= 4 && paragraphs.length % 2 === 0) {
+        const half = paragraphs.length / 2;
+        const firstHalf = paragraphs.slice(0, half);
+        const secondHalf = paragraphs.slice(half);
+        const isDuplicated = firstHalf.every((part, index) => part === secondHalf[index]);
+        if (isDuplicated) {
+            return firstHalf.join('\n\n');
+        }
+    }
+
+    return normalized;
+}
+
+function getYoutubeVideoId(url: string): string | null {
+    try {
+        const parsed = new URL(url);
+        const host = parsed.hostname.toLowerCase();
+
+        if (host === 'youtu.be') {
+            const id = parsed.pathname.split('/').filter(Boolean)[0];
+            return id || null;
+        }
+
+        if (host === 'youtube.com' || host === 'www.youtube.com') {
+            const id = parsed.searchParams.get('v');
+            return id || null;
+        }
+    } catch {
+        return null;
+    }
+
+    return null;
+}
+
+function buildYoutubePreviewHtml(youtubeUrl?: string): string {
+    if (!youtubeUrl) {
+        return '';
+    }
+
+    const videoId = getYoutubeVideoId(youtubeUrl);
+    if (!videoId) {
+        return `<p style="margin-bottom: 16px;">Siaran ulang webinar dapat diakses di sini:<br><a href="${youtubeUrl}" style="color: #2563eb; text-decoration: underline;">${youtubeUrl}</a></p>`;
+    }
+
+    const thumbnailUrl = `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
+    return `
+    <div style="margin: 16px 0 22px;">
+        <p style="margin-bottom: 10px;">Siaran ulang webinar dapat diakses di sini:</p>
+        <a href="${youtubeUrl}" style="text-decoration: none; display: inline-block;">
+            <img src="${thumbnailUrl}" alt="YouTube Preview" style="display: block; width: 100%; max-width: 560px; border-radius: 10px; border: 1px solid #d1d5db;" />
+            <p style="margin: 8px 0 0; color: #2563eb; text-decoration: underline; font-size: 13px;">${youtubeUrl}</p>
+        </a>
+    </div>`;
+}
+
 function buildEmailTemplate({
     recipientName,
     caption,
@@ -24,17 +95,21 @@ function buildEmailTemplate({
     sender,
     youtubeUrl,
 }: EmailTemplateInput): { subject: string; html: string } {
-    const personalizedCaption = caption
+    const personalizedCaptionRaw = caption
         .replace(/\[Nama\]/g, recipientName)
         .replace(/\[Nama Pengirim\]/g, sender.name)
         .replace(/\[Nama Penyelenggara\/Tim\]/g, sender.name)
         .replace(/\[Tim Penyelenggara\]/g, sender.name)
+        .replace(/\[Nama Instansi\/Tim Penyelenggara\]/g, sender.department || sender.name)
         .replace(/\[Nama Penyelenggara\/Instansi\]/g, sender.name)
+        .replace(/\[Nama Instansi\]/g, sender.department || sender.name)
         .replace(/\[Panitia\/Instansi\]/g, sender.name)
         .replace(/\[Panitia\]/g, sender.name)
         .replace(/\[Instansi\]/g, sender.department || sender.name)
         .replace(/\[Instansi\/Unit\]/g, sender.department)
         .replace(/\[Kontak\]/g, sender.contact || '');
+
+    const personalizedCaption = normalizeCaption(personalizedCaptionRaw);
 
     const safeEventName = sanitizeHtml(eventName);
     const safeEventDate = sanitizeHtml(eventDate);
@@ -45,6 +120,7 @@ function buildEmailTemplate({
     const hasCustomCaption = personalizedCaption.trim().length > 0;
     const captionContainsYoutubeUrl = !!youtubeUrl && personalizedCaption.includes(youtubeUrl);
     const captionHasClosing = /\b(hormat\s+kami|salam\s+hormat|hormat\s+saya)\b/i.test(personalizedCaption);
+    const youtubePreviewHtml = buildYoutubePreviewHtml(youtubeUrl);
 
     const formatCaptionParagraphs = (text: string): string => {
         const normalized = text.replace(/\r\n/g, '\n').trim();
@@ -116,9 +192,7 @@ function buildEmailTemplate({
 
     const customBodyHtml = `
     ${formattedCaptionHtml}
-    ${youtubeUrl && !captionContainsYoutubeUrl
-            ? `<p style="margin-bottom: 16px;">Siaran ulang webinar dapat diakses di sini:<br><a href="${youtubeUrl}" style="color: #2563eb; text-decoration: underline;">${youtubeUrl}</a></p>`
-            : ''}
+    ${youtubeUrl && !captionContainsYoutubeUrl ? youtubePreviewHtml : ''}
     ${captionHasClosing ? '' : signatureFooterHtml}
 `;
 
@@ -136,6 +210,8 @@ function buildEmailTemplate({
     <p style="margin-bottom: 16px;">
         Nantikan informasi mengenai webinar dan acara inspiratif kami selanjutnya. Sampai jumpa di lain kesempatan!
     </p>
+
+    ${youtubePreviewHtml}
 
     ${signatureFooterHtml}
 `;
