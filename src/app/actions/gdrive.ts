@@ -9,6 +9,7 @@ const DRIVE_REQUEST_TIMEOUT_MS = parseInt(process.env.DRIVE_REQUEST_TIMEOUT_MS |
 interface DriveFile {
     id: string;
     name: string;
+    resourceKey: string | null;
 }
 
 interface CertificateMatch {
@@ -16,6 +17,7 @@ interface CertificateMatch {
     email: string;
     fileId: string | null;
     fileName: string | null;
+    resourceKey: string | null;
     certBuffer: number[] | null;
 }
 
@@ -89,7 +91,7 @@ export async function listDriveFiles(folderId: string): Promise<DriveFile[]> {
         do {
             const response: { data: drive_v3.Schema$FileList } = await withTimeout(drive.files.list({
                 q: `'${folderId}' in parents and trashed = false and mimeType = 'application/pdf'`,
-                fields: 'nextPageToken, files(id, name)',
+                fields: 'nextPageToken, files(id, name, resourceKey)',
                 pageSize: 1000,
                 pageToken,
             }), DRIVE_REQUEST_TIMEOUT_MS, 'Timeout saat membaca daftar file Google Drive.');
@@ -99,6 +101,7 @@ export async function listDriveFiles(folderId: string): Promise<DriveFile[]> {
                 .map((file) => ({
                     id: file.id as string,
                     name: file.name as string,
+                    resourceKey: typeof file.resourceKey === 'string' ? file.resourceKey : null,
                 }));
 
             allFiles.push(...files);
@@ -115,16 +118,21 @@ export async function listDriveFiles(folderId: string): Promise<DriveFile[]> {
 /**
  * Download a file from Google Drive.
  */
-export async function downloadDriveFile(fileId: string): Promise<Buffer | null> {
+export async function downloadDriveFile(fileId: string, resourceKey?: string | null): Promise<Buffer | null> {
     await ensureAuthenticated();
     const drive = getDriveClient();
 
     try {
+        const params: drive_v3.Params$Resource$Files$Get = { fileId, alt: 'media' };
+        if (resourceKey) {
+            (params as unknown as { resourceKey?: string }).resourceKey = resourceKey;
+        }
+
         const response = await drive.files.get(
-            { fileId, alt: 'media' },
-            { responseType: 'arraybuffer' }
+            params as never,
+            { responseType: 'arraybuffer' } as never
         );
-        return Buffer.from(response.data as ArrayBuffer);
+        return Buffer.from(response.data as unknown as ArrayBuffer);
     } catch (error) {
         console.error('Error downloading Drive file:', error);
         return null;
@@ -155,6 +163,7 @@ export async function fetchCertificatesFromDrive(
                 ...recipient,
                 fileId: matchedFile.id,
                 fileName: matchedFile.name,
+                resourceKey: matchedFile.resourceKey,
                 certBuffer: null, // Will be downloaded during broadcast
             });
         } else {
@@ -162,6 +171,7 @@ export async function fetchCertificatesFromDrive(
                 ...recipient,
                 fileId: null,
                 fileName: null,
+                resourceKey: null,
                 certBuffer: null,
             });
         }
@@ -176,7 +186,7 @@ export async function fetchCertificatesFromDrive(
 export async function checkDriveMatches(
     folderId: string,
     recipients: { name: string; email: string }[]
-): Promise<{ name: string; email: string; matched: boolean; fileName: string | null; fileId: string | null }[]> {
+): Promise<{ name: string; email: string; matched: boolean; fileName: string | null; fileId: string | null; resourceKey: string | null }[]> {
     const identifier = await ensureAuthenticated();
     await enforceDriveRateLimit(identifier);
 
@@ -184,7 +194,7 @@ export async function checkDriveMatches(
     const exactMap = new Map<string, DriveFile>(
         files.map((file) => [normalizeName(file.name.replace(/\.[^/.]+$/, '')), file]),
     );
-    const results: { name: string; email: string; matched: boolean; fileName: string | null; fileId: string | null }[] = [];
+    const results: { name: string; email: string; matched: boolean; fileName: string | null; fileId: string | null; resourceKey: string | null }[] = [];
 
     for (const recipient of recipients) {
         const matchedFile = findMatchingFile(recipient.name, files, exactMap);
@@ -195,6 +205,7 @@ export async function checkDriveMatches(
             matched: !!matchedFile,
             fileName: matchedFile?.name || null,
             fileId: matchedFile?.id || null,
+            resourceKey: matchedFile?.resourceKey || null,
         });
     }
 

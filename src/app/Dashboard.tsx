@@ -36,6 +36,7 @@ type DriveMatchResult = {
     matched: boolean;
     fileName: string | null;
     fileId: string | null;
+    resourceKey: string | null;
 };
 
 export default function Dashboard() {
@@ -225,7 +226,7 @@ export default function Dashboard() {
                 const [match] = await fetchCertificatesFromDrive(certFolderPath.trim(), [previewRecipient]);
 
                 if (match?.fileId) {
-                    const driveBuffer = await downloadDriveFile(match.fileId);
+                    const driveBuffer = await downloadDriveFile(match.fileId, match.resourceKey);
                     if (driveBuffer) {
                         certBuffer = Array.from(driveBuffer);
                         certFilename = match.fileName || `${previewRecipient.name}.pdf`;
@@ -285,7 +286,7 @@ export default function Dashboard() {
         try {
             if (match.fileId) {
                 const { downloadDriveFile } = await import('./actions/gdrive');
-                const driveBuffer = await downloadDriveFile(match.fileId);
+                const driveBuffer = await downloadDriveFile(match.fileId, match.resourceKey);
 
                 if (!driveBuffer) {
                     throw new Error('File preview gagal diunduh dari Google Drive');
@@ -422,10 +423,10 @@ export default function Dashboard() {
                 }
 
                 recipientData = await Promise.all(driveMatches.map(async (match) => {
-                    let buffer: number[];
+                    let buffer: number[] | undefined;
                     let isCustom = false;
                     if (match.fileId) {
-                        const driveBuffer = await downloadDriveFile(match.fileId);
+                        const driveBuffer = await downloadDriveFile(match.fileId, match.resourceKey);
                         if (driveBuffer) {
                             buffer = Array.from(driveBuffer);
                             isCustom = true;
@@ -434,8 +435,6 @@ export default function Dashboard() {
                             if (matchedLocalCert) {
                                 buffer = Array.from(new Uint8Array(await matchedLocalCert.arrayBuffer()));
                                 isCustom = true;
-                            } else {
-                                buffer = defaultCertBuffer;
                             }
                         }
                     } else {
@@ -443,8 +442,6 @@ export default function Dashboard() {
                         if (matchedCert) {
                             buffer = Array.from(new Uint8Array(await matchedCert.arrayBuffer()));
                             isCustom = true;
-                        } else {
-                            buffer = defaultCertBuffer;
                         }
                     }
                     return {
