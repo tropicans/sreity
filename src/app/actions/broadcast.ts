@@ -86,7 +86,6 @@ function buildYoutubeLinkHtml(youtubeUrl?: string): string {
 
     return `
     <div style="margin: 18px 0 20px; padding: 14px; border: 1px solid #e5e7eb; border-radius: 12px; background: #f8fafc;">
-        <p style="margin: 0 0 10px; font-size: 13px; color: #374151;">Siaran ulang webinar</p>
         <a href="${youtubeUrl}" style="display: block; text-decoration: none; color: inherit;">
             <img src="${thumbnailUrl}" alt="Siaran ulang webinar" style="display: block; width: 100%; max-width: 560px; border-radius: 10px; border: 1px solid #d1d5db; margin: 0 auto;" />
         </a>
@@ -115,17 +114,27 @@ function splitCaptionClosing(text: string): { bodyText: string; closingText: str
     };
 }
 
-function formatClosingHtml(closingText: string): string {
+function formatClosingHtml(closingText: string, senderContact?: string): string {
     if (!closingText) {
         return '';
     }
 
+    const contact = (senderContact || '').trim();
+    const normalizedClosing = closingText.toLowerCase().replace(/\s+/g, '');
+    const normalizedContact = contact.toLowerCase().replace(/\s+/g, '');
+    const hasContactInClosing = !!contact && normalizedClosing.includes(normalizedContact);
+
     const normalized = closingText
         .replace(/\r\n/g, '\n')
         .replace(/,\s+/g, ',\n')
-        .replace(/(.+?)\s+(\+?\d[\d\s-]{7,})$/, '$1\n$2');
+        .replace(/(.+?)\s+(\+?\d[\d\s-]{7,})$/, '$1\n$2')
+        .trim();
 
-    const safeClosing = sanitizeHtml(normalized).replace(/\n/g, '<br/>');
+    const withContact = !hasContactInClosing && contact
+        ? `${normalized}\n${contact}`
+        : normalized;
+
+    const safeClosing = sanitizeHtml(withContact).replace(/\n/g, '<br/>');
 
     return `
     <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid #eee;">
@@ -212,7 +221,7 @@ function buildEmailTemplate({
     };
 
     const formattedCaptionHtml = formatCaptionParagraphs(customCaptionBody);
-    const formattedCustomClosingHtml = formatClosingHtml(customCaptionClosing);
+    const formattedCustomClosingHtml = formatClosingHtml(customCaptionClosing, sender.contact);
 
     const signatureFooterHtml = `
     <p style="margin-bottom: 8px;">Hormat kami,</p>
