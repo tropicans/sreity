@@ -57,7 +57,44 @@ function buildYoutubeLinkHtml(youtubeUrl?: string): string {
         return '';
     }
 
-    return `<p style="margin-bottom: 16px;">Siaran ulang webinar dapat diakses di sini:<br><a href="${youtubeUrl}" style="color: #2563eb; text-decoration: underline;">${youtubeUrl}</a></p>`;
+    const getYoutubeVideoId = (url: string): string | null => {
+        try {
+            const parsed = new URL(url);
+            const host = parsed.hostname.toLowerCase();
+
+            if (host === 'youtu.be') {
+                const id = parsed.pathname.split('/').filter(Boolean)[0];
+                return id || null;
+            }
+
+            if (host === 'youtube.com' || host === 'www.youtube.com') {
+                return parsed.searchParams.get('v');
+            }
+        } catch {
+            return null;
+        }
+
+        return null;
+    };
+
+    const videoId = getYoutubeVideoId(youtubeUrl);
+    const thumbnailUrl = videoId ? `https://img.youtube.com/vi/${videoId}/hqdefault.jpg` : '';
+
+    if (!thumbnailUrl) {
+        return `<p style="margin-bottom: 16px;">Siaran ulang webinar dapat diakses di sini:<br><a href="${youtubeUrl}" style="color: #2563eb; text-decoration: underline;">${youtubeUrl}</a></p>`;
+    }
+
+    return `
+    <div style="margin: 18px 0 20px; padding: 14px; border: 1px solid #e5e7eb; border-radius: 12px; background: #f8fafc;">
+        <p style="margin: 0 0 10px; font-size: 13px; color: #374151;">Siaran ulang webinar</p>
+        <a href="${youtubeUrl}" style="display: block; text-decoration: none; color: inherit;">
+            <img src="${thumbnailUrl}" alt="Siaran ulang webinar" style="display: block; width: 100%; max-width: 560px; border-radius: 10px; border: 1px solid #d1d5db; margin: 0 auto;" />
+        </a>
+        <div style="margin-top: 12px; text-align: center;">
+            <a href="${youtubeUrl}" style="display: inline-block; background: #2563eb; color: #ffffff; text-decoration: none; padding: 10px 16px; border-radius: 8px; font-size: 13px; font-weight: 600;">Buka Siaran Ulang</a>
+        </div>
+        <p style="margin: 10px 0 0; color: #2563eb; font-size: 12px; text-decoration: underline; word-break: break-all; text-align: center;">${youtubeUrl}</p>
+    </div>`;
 }
 
 function splitCaptionClosing(text: string): { bodyText: string; closingText: string } {
