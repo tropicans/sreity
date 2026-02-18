@@ -5,9 +5,10 @@ export default auth((req) => {
     const isLoggedIn = !!req.auth;
     const isLoginPage = req.nextUrl.pathname === '/login';
     const isAuthApi = req.nextUrl.pathname.startsWith('/api/auth');
+    const isCronApi = req.nextUrl.pathname.startsWith('/api/cron/process-pending');
 
     // Allow auth API routes
-    if (isAuthApi) {
+    if (isAuthApi || isCronApi) {
         return NextResponse.next();
     }
 
