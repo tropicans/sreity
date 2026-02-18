@@ -210,18 +210,48 @@ export default function Dashboard() {
 
         setIsSendingTestEmail(true);
         try {
+            let certBuffer: number[] | undefined;
+            let certFilename: string | undefined;
+
+            if (certFolderPath.trim()) {
+                const { fetchCertificatesFromDrive, downloadDriveFile } = await import('./actions/gdrive');
+                const [match] = await fetchCertificatesFromDrive(certFolderPath.trim(), [previewRecipient]);
+
+                if (match?.fileId) {
+                    const driveBuffer = await downloadDriveFile(match.fileId);
+                    if (driveBuffer) {
+                        certBuffer = Array.from(driveBuffer);
+                        certFilename = match.fileName || `${previewRecipient.name}.pdf`;
+                    }
+                }
+            }
+
+            if (!certBuffer) {
+                const matchedCert = matchCert(previewRecipient.name);
+                if (matchedCert) {
+                    certBuffer = Array.from(new Uint8Array(await matchedCert.arrayBuffer()));
+                    certFilename = matchedCert.name;
+                }
+            }
+
+            if (!certBuffer) {
+                throw new Error('Sertifikat PDF untuk penerima preview tidak ditemukan');
+            }
+
             const result = await sendTestEmailAction({
                 recipient: previewRecipient,
+                certBuffer,
+                certFilename,
                 caption: editedCaption,
                 eventName: aiResult.eventName,
                 eventDate: aiResult.eventDate,
                 sender: senderForm,
                 youtubeUrl: youtubeUrl.trim() || undefined,
             });
-            alert(`Test email berhasil dikirim ke ${result.sentTo}`);
+            alert(`Test email berhasil dikirim ke ${result.sentTo} dengan lampiran sertifikat.`);
         } catch (error) {
             console.error('Send test email failed:', error);
-            alert('Gagal mengirim test email. Cek konfigurasi email dan coba lagi.');
+            alert('Gagal mengirim test email. Pastikan sertifikat PDF untuk penerima preview tersedia.');
         } finally {
             setIsSendingTestEmail(false);
         }

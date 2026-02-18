@@ -4,6 +4,8 @@ import { google, drive_v3 } from 'googleapis';
 import { auth } from '@/lib/auth';
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit';
 
+const DRIVE_REQUEST_TIMEOUT_MS = parseInt(process.env.DRIVE_REQUEST_TIMEOUT_MS || '45000', 10);
+
 interface DriveFile {
     id: string;
     name: string;
@@ -26,6 +28,35 @@ function getDriveClient() {
         throw new Error('GOOGLE_API_KEY is not set in environment variables');
     }
     return google.drive({ version: 'v3', auth: apiKey });
+}
+
+function normalizeName(value: string): string {
+    return value.toLowerCase().replace(/[^a-z0-9]/g, '_');
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, errorMessage: string): Promise<T> {
+    const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error(errorMessage)), timeoutMs);
+    });
+
+    return Promise.race([promise, timeoutPromise]);
+}
+
+function findMatchingFile(
+    recipientName: string,
+    files: DriveFile[],
+    exactMap: Map<string, DriveFile>,
+): DriveFile | undefined {
+    const normalizedRecipient = normalizeName(recipientName);
+    const exact = exactMap.get(normalizedRecipient);
+    if (exact) {
+        return exact;
+    }
+
+    return files.find((file) => {
+        const normalizedFileName = normalizeName(file.name.replace(/\.[^/.]+$/, ''));
+        return normalizedFileName.includes(normalizedRecipient) || normalizedRecipient.includes(normalizedFileName);
+    });
 }
 
 async function ensureAuthenticated() {
@@ -56,12 +87,12 @@ export async function listDriveFiles(folderId: string): Promise<DriveFile[]> {
         let pageToken: string | undefined = undefined;
 
         do {
-            const response: { data: drive_v3.Schema$FileList } = await drive.files.list({
-                q: `'${folderId}' in parents and trashed = false`,
+            const response: { data: drive_v3.Schema$FileList } = await withTimeout(drive.files.list({
+                q: `'${folderId}' in parents and trashed = false and mimeType = 'application/pdf'`,
                 fields: 'nextPageToken, files(id, name)',
                 pageSize: 1000,
                 pageToken,
-            });
+            }), DRIVE_REQUEST_TIMEOUT_MS, 'Timeout saat membaca daftar file Google Drive.');
 
             const files = (response.data.files || [])
                 .filter((file: drive_v3.Schema$File) => typeof file.id === 'string' && typeof file.name === 'string')
@@ -111,17 +142,13 @@ export async function fetchCertificatesFromDrive(
     await enforceDriveRateLimit(identifier);
 
     const files = await listDriveFiles(folderId);
+    const exactMap = new Map<string, DriveFile>(
+        files.map((file) => [normalizeName(file.name.replace(/\.[^/.]+$/, '')), file]),
+    );
     const results: CertificateMatch[] = [];
 
     for (const recipient of recipients) {
-        // Normalize recipient name
-        const normalizedName = recipient.name.toLowerCase().replace(/[^a-z0-9]/g, '_');
-
-        // Find matching file
-        const matchedFile = files.find(file => {
-            const fileName = file.name.toLowerCase().replace(/\.[^/.]+$/, '').replace(/[^a-z0-9]/g, '_');
-            return fileName.includes(normalizedName) || normalizedName.includes(fileName);
-        });
+        const matchedFile = findMatchingFile(recipient.name, files, exactMap);
 
         if (matchedFile) {
             results.push({
@@ -154,17 +181,13 @@ export async function checkDriveMatches(
     await enforceDriveRateLimit(identifier);
 
     const files = await listDriveFiles(folderId);
+    const exactMap = new Map<string, DriveFile>(
+        files.map((file) => [normalizeName(file.name.replace(/\.[^/.]+$/, '')), file]),
+    );
     const results: { name: string; email: string; matched: boolean; fileName: string | null; fileId: string | null }[] = [];
 
     for (const recipient of recipients) {
-        // Normalize recipient name
-        const normalizedName = recipient.name.toLowerCase().replace(/[^a-z0-9]/g, '_');
-
-        // Find matching file
-        const matchedFile = files.find(file => {
-            const fileName = file.name.toLowerCase().replace(/\.[^/.]+$/, '').replace(/[^a-z0-9]/g, '_');
-            return fileName.includes(normalizedName) || normalizedName.includes(fileName);
-        });
+        const matchedFile = findMatchingFile(recipient.name, files, exactMap);
 
         results.push({
             name: recipient.name,

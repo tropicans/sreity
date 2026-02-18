@@ -28,6 +28,7 @@ function buildEmailTemplate({
         .replace(/\[Nama\]/g, recipientName)
         .replace(/\[Nama Pengirim\]/g, sender.name)
         .replace(/\[Nama Penyelenggara\/Tim\]/g, sender.name)
+        .replace(/\[Tim Penyelenggara\]/g, sender.name)
         .replace(/\[Nama Penyelenggara\/Instansi\]/g, sender.name)
         .replace(/\[Panitia\/Instansi\]/g, sender.name)
         .replace(/\[Panitia\]/g, sender.name)
@@ -43,7 +44,7 @@ function buildEmailTemplate({
     const safeSenderContact = sanitizeHtml(sender.contact || '');
     const hasCustomCaption = personalizedCaption.trim().length > 0;
     const captionContainsYoutubeUrl = !!youtubeUrl && personalizedCaption.includes(youtubeUrl);
-    const captionHasClosing = /hormat\s+kami/i.test(personalizedCaption);
+    const captionHasClosing = /\b(hormat\s+kami|salam\s+hormat|hormat\s+saya)\b/i.test(personalizedCaption);
 
     const formatCaptionParagraphs = (text: string): string => {
         const normalized = text.replace(/\r\n/g, '\n').trim();
@@ -385,6 +386,8 @@ export async function generateEmailPreviewAction({
 
 export async function sendTestEmailAction({
     recipient,
+    certBuffer,
+    certFilename,
     caption,
     eventName,
     eventDate,
@@ -392,6 +395,8 @@ export async function sendTestEmailAction({
     youtubeUrl,
 }: {
     recipient: { name: string; email: string };
+    certBuffer?: number[];
+    certFilename?: string;
     caption: string;
     eventName: string;
     eventDate: string;
@@ -424,6 +429,14 @@ export async function sendTestEmailAction({
         to: user.email,
         subject: `[TEST] ${subject}`,
         html,
+        attachments: certBuffer && certBuffer.length > 0
+            ? [
+                {
+                    filename: certFilename || `Sertifikat_${recipient.name.replace(/\s+/g, '_')}.pdf`,
+                    content: Buffer.from(certBuffer),
+                },
+            ]
+            : undefined,
     });
 
     return { sentTo: user.email };
