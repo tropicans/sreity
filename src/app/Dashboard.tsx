@@ -1,12 +1,12 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Upload, Users, CheckCircle2, Loader2, Send, X, ChevronRight, Download, FileText, Search, AlertCircle, LogOut, Eye, Mail } from 'lucide-react';
+import { Upload, Users, CheckCircle2, Loader2, Send, X, ChevronRight, ChevronDown, Download, FileText, Search, AlertCircle, LogOut, Eye, Mail, History, Clock, RefreshCw } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useDropzone } from 'react-dropzone';
 import Papa from 'papaparse';
 import Image from 'next/image';
-import { analyzeCertificateAction, sendBroadcastAction, generateEmailPreviewAction, sendTestEmailAction, createBroadcastSession, sendSingleEmail, queuePendingRecipient } from './actions/broadcast';
+import { analyzeCertificateAction, sendBroadcastAction, generateEmailPreviewAction, sendTestEmailAction, createBroadcastSession, sendSingleEmail, queuePendingRecipient, getBroadcastHistory, getBroadcastDetail } from './actions/broadcast';
 import { signOut, useSession } from 'next-auth/react';
 
 type Recipient = { name: string; email: string };
@@ -1137,6 +1137,9 @@ export default function Dashboard() {
                             </motion.section>
                         )}
                     </AnimatePresence>
+
+                    {/* Section 4: Broadcast History */}
+                    <BroadcastHistorySection />
                 </div>
             </main>
 
@@ -1321,5 +1324,295 @@ export default function Dashboard() {
                 )}
             </AnimatePresence>
         </div>
+    );
+}
+
+type BroadcastHistoryItem = {
+    id: string;
+    eventName: string;
+    eventDate: string;
+    createdAt: string;
+    stats: { sent: number; failed: number; pending: number; total: number };
+};
+
+type BroadcastDetailData = {
+    broadcast: { id: string; eventName: string; eventDate: string; createdAt: string };
+    recipients: { name: string; email: string; status: string; sentAt: string | null }[];
+    pendingEmails: { name: string; email: string; status: string; attempts: number; lastError: string | null; scheduledFor: string; sentAt: string | null }[];
+};
+
+function BroadcastHistorySection() {
+    const [history, setHistory] = useState<BroadcastHistoryItem[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [expandedId, setExpandedId] = useState<string | null>(null);
+    const [detail, setDetail] = useState<BroadcastDetailData | null>(null);
+    const [detailLoading, setDetailLoading] = useState(false);
+    const [filter, setFilter] = useState<'all' | 'sent' | 'failed' | 'pending'>('all');
+    const [refreshing, setRefreshing] = useState(false);
+
+    const fetchHistory = useCallback(async () => {
+        try {
+            const data = await getBroadcastHistory();
+            setHistory(data);
+        } catch (e) {
+            console.error('Failed to load history:', e);
+        } finally {
+            setLoading(false);
+            setRefreshing(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        fetchHistory();
+    }, [fetchHistory]);
+
+    // Auto-refresh when there are pending emails
+    useEffect(() => {
+        const hasPending = history.some(b => b.stats.pending > 0);
+        if (!hasPending) return;
+        const interval = setInterval(fetchHistory, 30000);
+        return () => clearInterval(interval);
+    }, [history, fetchHistory]);
+
+    const handleExpand = async (id: string) => {
+        if (expandedId === id) {
+            setExpandedId(null);
+            setDetail(null);
+            setFilter('all');
+            return;
+        }
+        setExpandedId(id);
+        setDetailLoading(true);
+        setFilter('all');
+        try {
+            const data = await getBroadcastDetail(id);
+            setDetail(data);
+        } catch (e) {
+            console.error('Failed to load detail:', e);
+        } finally {
+            setDetailLoading(false);
+        }
+    };
+
+    const handleRefresh = async () => {
+        setRefreshing(true);
+        await fetchHistory();
+        if (expandedId) {
+            setDetailLoading(true);
+            try {
+                const data = await getBroadcastDetail(expandedId);
+                setDetail(data);
+            } catch (e) {
+                console.error(e);
+            } finally {
+                setDetailLoading(false);
+            }
+        }
+    };
+
+    const getFilteredItems = () => {
+        if (!detail) return [];
+        const immediate = detail.recipients.map(r => ({
+            name: r.name, email: r.email, status: r.status === 'success' ? 'sent' : r.status,
+            time: r.sentAt, error: null, attempts: 0,
+        }));
+        const pending = detail.pendingEmails.map(p => ({
+            name: p.name, email: p.email, status: p.status,
+            time: p.sentAt || p.scheduledFor, error: p.lastError, attempts: p.attempts,
+        }));
+        const all = [...immediate, ...pending];
+        if (filter === 'all') return all;
+        if (filter === 'sent') return all.filter(i => i.status === 'sent' || i.status === 'success');
+        if (filter === 'failed') return all.filter(i => i.status === 'failed');
+        return all.filter(i => i.status === 'pending');
+    };
+
+    const formatDate = (iso: string) => {
+        const d = new Date(iso);
+        return d.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    };
+
+    if (loading) {
+        return (
+            <div className="mt-20 flex justify-center">
+                <Loader2 className="w-6 h-6 animate-spin text-[#86868b]" />
+            </div>
+        );
+    }
+
+    if (history.length === 0) return null;
+
+    return (
+        <section className="mt-20">
+            <div className="flex items-center justify-between mb-8">
+                <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-lg bg-[#5e5ce6]/20 flex items-center justify-center">
+                        <History className="w-4 h-4 text-[#5e5ce6]" />
+                    </div>
+                    <h2 className="text-2xl font-semibold tracking-tight">Riwayat Broadcast</h2>
+                </div>
+                <button
+                    onClick={handleRefresh}
+                    disabled={refreshing}
+                    className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-xs text-[#86868b] hover:text-white hover:bg-white/10 transition-all disabled:opacity-50"
+                >
+                    <RefreshCw className={`w-3 h-3 ${refreshing ? 'animate-spin' : ''}`} />
+                    Refresh
+                </button>
+            </div>
+
+            <div className="space-y-3">
+                {history.map((b) => {
+                    const pct = b.stats.total > 0 ? Math.round((b.stats.sent / b.stats.total) * 100) : 0;
+                    const isExpanded = expandedId === b.id;
+                    const hasPending = b.stats.pending > 0;
+
+                    return (
+                        <div key={b.id} className="glass-panel overflow-hidden bg-white/[0.01]">
+                            <button
+                                onClick={() => handleExpand(b.id)}
+                                className="w-full px-6 py-5 flex items-center gap-4 hover:bg-white/[0.03] transition-colors text-left"
+                            >
+                                <div className="flex-1 min-w-0">
+                                    <div className="flex items-center gap-2 mb-1">
+                                        <h3 className="font-semibold text-sm truncate">{b.eventName}</h3>
+                                        {hasPending && (
+                                            <span className="flex-shrink-0 flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#ff9f0a]/15 text-[#ff9f0a] text-[9px] font-bold uppercase tracking-widest">
+                                                <Clock className="w-2.5 h-2.5" /> Proses
+                                            </span>
+                                        )}
+                                    </div>
+                                    <p className="text-[11px] text-[#86868b]">{b.eventDate} · {formatDate(b.createdAt)}</p>
+
+                                    {/* Mini progress bar */}
+                                    <div className="mt-2 w-full bg-white/5 rounded-full h-1.5 overflow-hidden">
+                                        <div
+                                            className="h-full rounded-full transition-all duration-500"
+                                            style={{
+                                                width: `${b.stats.total > 0 ? ((b.stats.sent + b.stats.failed) / b.stats.total) * 100 : 0}%`,
+                                                background: b.stats.failed > 0
+                                                    ? `linear-gradient(90deg, #30d158 ${(b.stats.sent / (b.stats.sent + b.stats.failed)) * 100}%, #ff453a ${(b.stats.sent / (b.stats.sent + b.stats.failed)) * 100}%)`
+                                                    : '#30d158',
+                                            }}
+                                        />
+                                    </div>
+                                </div>
+
+                                {/* Stats */}
+                                <div className="flex items-center gap-4 flex-shrink-0">
+                                    <div className="text-center">
+                                        <p className="text-lg font-bold text-[#30d158] tabular-nums">{b.stats.sent}</p>
+                                        <p className="text-[9px] text-[#86868b] uppercase tracking-widest">Terkirim</p>
+                                    </div>
+                                    {b.stats.failed > 0 && (
+                                        <div className="text-center">
+                                            <p className="text-lg font-bold text-[#ff453a] tabular-nums">{b.stats.failed}</p>
+                                            <p className="text-[9px] text-[#86868b] uppercase tracking-widest">Gagal</p>
+                                        </div>
+                                    )}
+                                    {b.stats.pending > 0 && (
+                                        <div className="text-center">
+                                            <p className="text-lg font-bold text-[#ff9f0a] tabular-nums">{b.stats.pending}</p>
+                                            <p className="text-[9px] text-[#86868b] uppercase tracking-widest">Pending</p>
+                                        </div>
+                                    )}
+                                    <div className="text-center border-l border-white/10 pl-4">
+                                        <p className="text-lg font-bold tabular-nums">{pct}%</p>
+                                        <p className="text-[9px] text-[#86868b] uppercase tracking-widest">Sukses</p>
+                                    </div>
+                                    {isExpanded ? <ChevronDown className="w-4 h-4 text-[#86868b]" /> : <ChevronRight className="w-4 h-4 text-[#86868b]" />}
+                                </div>
+                            </button>
+
+                            {/* Expanded detail */}
+                            <AnimatePresence>
+                                {isExpanded && (
+                                    <motion.div
+                                        initial={{ height: 0, opacity: 0 }}
+                                        animate={{ height: 'auto', opacity: 1 }}
+                                        exit={{ height: 0, opacity: 0 }}
+                                        transition={{ duration: 0.2 }}
+                                        className="overflow-hidden"
+                                    >
+                                        <div className="border-t border-white/5">
+                                            {/* Filters */}
+                                            <div className="px-6 py-3 flex items-center gap-2 border-b border-white/5 bg-white/[0.02]">
+                                                {(['all', 'sent', 'failed', 'pending'] as const).map((f) => (
+                                                    <button
+                                                        key={f}
+                                                        onClick={() => setFilter(f)}
+                                                        className={`px-3 py-1 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-all ${filter === f
+                                                                ? 'bg-[#2997ff]/20 text-[#2997ff]'
+                                                                : 'text-[#86868b] hover:text-white hover:bg-white/5'
+                                                            }`}
+                                                    >
+                                                        {f === 'all' ? 'Semua' : f === 'sent' ? 'Terkirim' : f === 'failed' ? 'Gagal' : 'Pending'}
+                                                    </button>
+                                                ))}
+                                            </div>
+
+                                            {detailLoading ? (
+                                                <div className="py-8 flex justify-center">
+                                                    <Loader2 className="w-5 h-5 animate-spin text-[#86868b]" />
+                                                </div>
+                                            ) : (
+                                                <div className="max-h-80 overflow-y-auto">
+                                                    <table className="w-full text-left text-xs">
+                                                        <thead className="sticky top-0 bg-[#1a1a1c] z-10">
+                                                            <tr className="border-b border-white/5">
+                                                                <th className="px-6 py-2 text-[9px] font-bold uppercase tracking-widest text-[#86868b]">Nama</th>
+                                                                <th className="px-4 py-2 text-[9px] font-bold uppercase tracking-widest text-[#86868b]">Email</th>
+                                                                <th className="px-4 py-2 text-[9px] font-bold uppercase tracking-widest text-[#86868b]">Status</th>
+                                                                <th className="px-4 py-2 text-[9px] font-bold uppercase tracking-widest text-[#86868b] text-right">Waktu</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody className="divide-y divide-white/5">
+                                                            {getFilteredItems().map((item, i) => (
+                                                                <tr key={i} className="hover:bg-white/[0.02] transition-colors">
+                                                                    <td className="px-6 py-2.5 truncate max-w-[150px]">{item.name}</td>
+                                                                    <td className="px-4 py-2.5 font-mono text-[#a1a1a6] truncate max-w-[200px]">{item.email}</td>
+                                                                    <td className="px-4 py-2.5">
+                                                                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-widest ${item.status === 'sent' || item.status === 'success'
+                                                                                ? 'bg-[#30d158]/15 text-[#30d158]'
+                                                                                : item.status === 'failed'
+                                                                                    ? 'bg-[#ff453a]/15 text-[#ff453a]'
+                                                                                    : 'bg-[#ff9f0a]/15 text-[#ff9f0a]'
+                                                                            }`}>
+                                                                            {item.status === 'sent' || item.status === 'success' ? '✓' : item.status === 'failed' ? '✗' : '⏳'}
+                                                                            {item.status === 'success' ? 'sent' : item.status}
+                                                                        </span>
+                                                                        {item.error && (
+                                                                            <p className="text-[10px] text-[#ff453a]/70 mt-0.5 truncate max-w-[200px]">{item.error}</p>
+                                                                        )}
+                                                                    </td>
+                                                                    <td className="px-4 py-2.5 text-[#86868b] text-right whitespace-nowrap">
+                                                                        {item.time ? formatDate(item.time) : '-'}
+                                                                    </td>
+                                                                </tr>
+                                                            ))}
+                                                        </tbody>
+                                                    </table>
+                                                    {getFilteredItems().length === 0 && (
+                                                        <div className="py-8 text-center text-[#86868b] text-xs">
+                                                            Tidak ada data untuk filter ini.
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </motion.div>
+                                )}
+                            </AnimatePresence>
+                        </div>
+                    );
+                })}
+            </div>
+
+            {history.some(b => b.stats.pending > 0) && (
+                <p className="text-center text-[10px] text-[#86868b] mt-4 flex items-center justify-center gap-1">
+                    <RefreshCw className="w-3 h-3" /> Auto-refresh setiap 30 detik
+                </p>
+            )}
+        </section>
     );
 }

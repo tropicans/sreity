@@ -886,3 +886,113 @@ export async function sendSingleEmail({
         return { email: recipient.email, status: 'failed' };
     }
 }
+
+export async function getBroadcastHistory() {
+    await ensureAuthenticatedUser();
+
+    const broadcasts = await prisma.broadcast.findMany({
+        orderBy: { createdAt: 'desc' },
+        take: 20,
+        select: {
+            id: true,
+            eventName: true,
+            eventDate: true,
+            createdAt: true,
+            _count: {
+                select: {
+                    recipients: true,
+                    pendingEmails: true,
+                },
+            },
+        },
+    });
+
+    // Get detailed stats per broadcast
+    const results = await Promise.all(broadcasts.map(async (b) => {
+        const recipientStats = await prisma.recipient.groupBy({
+            by: ['status'],
+            where: { broadcastId: b.id },
+            _count: true,
+        });
+
+        const pendingStats = await prisma.pendingEmail.groupBy({
+            by: ['status'],
+            where: { broadcastId: b.id },
+            _count: true,
+        });
+
+        const sent = recipientStats.find(s => s.status === 'success')?._count || 0;
+        const failed = recipientStats.find(s => s.status === 'failed')?._count || 0;
+        const pendingFromRecipients = recipientStats.find(s => s.status === 'pending')?._count || 0;
+        const pendingFromEmails = pendingStats.find(s => s.status === 'pending')?._count || 0;
+        const sentFromPending = pendingStats.find(s => s.status === 'sent')?._count || 0;
+        const failedFromPending = pendingStats.find(s => s.status === 'failed')?._count || 0;
+
+        return {
+            id: b.id,
+            eventName: b.eventName,
+            eventDate: b.eventDate,
+            createdAt: b.createdAt.toISOString(),
+            stats: {
+                sent: sent + sentFromPending,
+                failed: failed + failedFromPending,
+                pending: pendingFromEmails,
+                total: sent + failed + pendingFromRecipients + pendingFromEmails + sentFromPending + failedFromPending,
+            },
+        };
+    }));
+
+    return results;
+}
+
+export async function getBroadcastDetail(broadcastId: string) {
+    await ensureAuthenticatedUser();
+
+    const broadcast = await prisma.broadcast.findUnique({
+        where: { id: broadcastId },
+        select: {
+            id: true,
+            eventName: true,
+            eventDate: true,
+            createdAt: true,
+        },
+    });
+
+    if (!broadcast) throw new Error('Broadcast not found');
+
+    const recipients = await prisma.recipient.findMany({
+        where: { broadcastId },
+        select: { name: true, email: true, status: true, sentAt: true },
+        orderBy: { sentAt: 'desc' },
+    });
+
+    const pendingEmails = await prisma.pendingEmail.findMany({
+        where: { broadcastId },
+        select: {
+            name: true,
+            email: true,
+            status: true,
+            attempts: true,
+            lastError: true,
+            scheduledFor: true,
+            sentAt: true,
+        },
+        orderBy: { createdAt: 'asc' },
+    });
+
+    return {
+        broadcast: {
+            ...broadcast,
+            createdAt: broadcast.createdAt.toISOString(),
+        },
+        recipients: recipients.map(r => ({
+            ...r,
+            sentAt: r.sentAt?.toISOString() || null,
+        })),
+        pendingEmails: pendingEmails.map(p => ({
+            ...p,
+            scheduledFor: p.scheduledFor.toISOString(),
+            sentAt: p.sentAt?.toISOString() || null,
+        })),
+    };
+}
