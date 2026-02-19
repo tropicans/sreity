@@ -662,3 +662,207 @@ export async function sendTestEmailAction({
 
     return { sentTo: user.email };
 }
+
+// ── Progressive Broadcast Actions ──────────────────────────────────────
+
+export async function createBroadcastSession({
+    recipients,
+    defaultCertBuffer,
+    caption,
+    eventName,
+    eventDate,
+    sender,
+    youtubeUrl,
+}: {
+    recipients: { name: string; email: string; certBuffer?: number[] }[];
+    defaultCertBuffer?: number[];
+    caption: string;
+    eventName: string;
+    eventDate: string;
+    sender: { name: string; department: string; contact: string };
+    youtubeUrl?: string;
+}): Promise<{
+    broadcastId: string;
+    immediateRecipients: { name: string; email: string; certBuffer?: number[] }[];
+    pendingCount: number;
+    defaultCertBuffer: number[];
+}> {
+    const user = await ensureAuthenticatedUser();
+
+    const emailProvider = (process.env.EMAIL_PROVIDER || 'gmail').toLowerCase();
+    const gmailSafeDailyLimit = getGmailSafeDailyLimit();
+
+    // Rate limit check
+    const rateLimitResult = checkRateLimit(user.id || user.email || 'anonymous', RATE_LIMITS.broadcast);
+    if (!rateLimitResult.success) {
+        throw new Error(rateLimitResult.message || 'Rate limit exceeded. Max 5 broadcasts per hour.');
+    }
+
+    // Validate input
+    const validationResult = broadcastInputSchema.safeParse({
+        recipients,
+        defaultCertBuffer,
+        caption,
+        eventName,
+        eventDate,
+        sender,
+        youtubeUrl,
+    });
+
+    if (!validationResult.success) {
+        const errorMessages = validationResult.error.issues.map((e: { message: string }) => e.message).join(', ');
+        throw new Error(`Validation failed: ${errorMessages}`);
+    }
+
+    if (youtubeUrl && !isValidYoutubeUrl(youtubeUrl)) {
+        throw new Error('Invalid YouTube URL. Only youtube.com and youtu.be URLs are allowed.');
+    }
+
+    const safeEventName = sanitizeHtml(eventName);
+    const safeEventDate = sanitizeHtml(eventDate);
+
+    const firstAvailableCertificate = recipients.find((r) => r.certBuffer && r.certBuffer.length > 0)?.certBuffer
+        || defaultCertBuffer;
+
+    if (!firstAvailableCertificate || firstAvailableCertificate.length === 0) {
+        throw new Error('Sertifikat tidak ditemukan. Upload file sertifikat default atau pastikan tiap penerima punya sertifikat.');
+    }
+
+    const broadcast = await prisma.broadcast.create({
+        data: {
+            eventName: safeEventName,
+            eventDate: safeEventDate,
+            caption,
+            certificate: Buffer.from(firstAvailableCertificate),
+        },
+    });
+
+    const immediateBatchLimit = getImmediateBatchLimit();
+    const immediateSendCount = Math.min(gmailSafeDailyLimit, immediateBatchLimit);
+
+    const immediateRecipients = emailProvider === 'gmail'
+        ? recipients.slice(0, immediateSendCount)
+        : recipients;
+    const pendingRecipients = emailProvider === 'gmail'
+        ? recipients.slice(immediateSendCount)
+        : [];
+
+    // Queue pending recipients
+    if (pendingRecipients.length > 0) {
+        const scheduledFor = new Date(Date.now() + getPendingDelayHours() * 60 * 60 * 1000);
+
+        const pendingEmailRows = pendingRecipients.map((recipient) => {
+            const { subject, html } = buildEmailTemplate({
+                recipientName: recipient.name,
+                caption,
+                eventName,
+                eventDate,
+                sender,
+                youtubeUrl,
+            });
+
+            return {
+                name: recipient.name,
+                email: recipient.email,
+                subject,
+                html,
+                certificateFilename: `Sertifikat_${recipient.name.replace(/\s+/g, '_')}.pdf`,
+                certificate: Buffer.from(recipient.certBuffer && recipient.certBuffer.length > 0 ? recipient.certBuffer : firstAvailableCertificate),
+                status: 'pending',
+                scheduledFor,
+                broadcastId: broadcast.id,
+            };
+        });
+
+        await prisma.pendingEmail.createMany({ data: pendingEmailRows });
+
+        await prisma.recipient.createMany({
+            data: pendingRecipients.map((recipient) => ({
+                name: recipient.name,
+                email: recipient.email,
+                status: 'pending',
+                broadcastId: broadcast.id,
+            })),
+        });
+    }
+
+    return {
+        broadcastId: broadcast.id,
+        immediateRecipients,
+        pendingCount: pendingRecipients.length,
+        defaultCertBuffer: Array.from(firstAvailableCertificate),
+    };
+}
+
+export async function sendSingleEmail({
+    broadcastId,
+    recipient,
+    defaultCertBuffer,
+    caption,
+    eventName,
+    eventDate,
+    sender,
+    youtubeUrl,
+}: {
+    broadcastId: string;
+    recipient: { name: string; email: string; certBuffer?: number[] };
+    defaultCertBuffer: number[];
+    caption: string;
+    eventName: string;
+    eventDate: string;
+    sender: { name: string; department: string; contact: string };
+    youtubeUrl?: string;
+}): Promise<{ email: string; status: string }> {
+    await ensureAuthenticatedUser();
+
+    const { subject, html } = buildEmailTemplate({
+        recipientName: recipient.name,
+        caption,
+        eventName,
+        eventDate,
+        sender,
+        youtubeUrl,
+    });
+
+    try {
+        const certBuffer = recipient.certBuffer && recipient.certBuffer.length > 0
+            ? recipient.certBuffer
+            : defaultCertBuffer;
+
+        await sendCertificateEmail({
+            to: recipient.email,
+            subject,
+            html,
+            attachments: [
+                {
+                    filename: `Sertifikat_${recipient.name.replace(/\s+/g, '_')}.pdf`,
+                    content: Buffer.from(certBuffer),
+                },
+            ],
+        });
+
+        await prisma.recipient.create({
+            data: {
+                name: recipient.name,
+                email: recipient.email,
+                status: 'success',
+                broadcastId,
+            },
+        });
+
+        return { email: recipient.email, status: 'success' };
+    } catch (error) {
+        console.error(`Failed to send to ${recipient.email}:`, error);
+
+        await prisma.recipient.create({
+            data: {
+                name: recipient.name,
+                email: recipient.email,
+                status: 'failed',
+                broadcastId,
+            },
+        });
+
+        return { email: recipient.email, status: 'failed' };
+    }
+}

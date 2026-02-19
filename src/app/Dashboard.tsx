@@ -1,12 +1,12 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Upload, Users, CheckCircle2, Loader2, Send, X, ChevronRight, Download, FileText, Search, AlertCircle, LogOut, Eye, Mail } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useDropzone } from 'react-dropzone';
 import Papa from 'papaparse';
 import Image from 'next/image';
-import { analyzeCertificateAction, sendBroadcastAction, generateEmailPreviewAction, sendTestEmailAction } from './actions/broadcast';
+import { analyzeCertificateAction, sendBroadcastAction, generateEmailPreviewAction, sendTestEmailAction, createBroadcastSession, sendSingleEmail } from './actions/broadcast';
 import { signOut, useSession } from 'next-auth/react';
 
 type Recipient = { name: string; email: string };
@@ -67,6 +67,15 @@ export default function Dashboard() {
     const [isSendingTestEmail, setIsSendingTestEmail] = useState(false);
     const [emailPreviewHtml, setEmailPreviewHtml] = useState('');
     const [emailPreviewSubject, setEmailPreviewSubject] = useState('');
+    // Broadcast progress state
+    const [isBroadcasting, setIsBroadcasting] = useState(false);
+    const [broadcastProgress, setBroadcastProgress] = useState(0);
+    const [broadcastTotal, setBroadcastTotal] = useState(0);
+    const [broadcastResults, setBroadcastResults] = useState<SendResult[]>([]);
+    const [currentRecipientEmail, setCurrentRecipientEmail] = useState('');
+    const [broadcastStartTime, setBroadcastStartTime] = useState<number | null>(null);
+    const [broadcastPendingCount, setBroadcastPendingCount] = useState(0);
+    const broadcastAbortRef = useRef(false);
     const { data: session } = useSession();
     const deliveredCount = results?.filter((r) => r.status === 'success').length ?? 0;
     const failedCount = results?.filter((r) => r.status === 'failed').length ?? 0;
@@ -74,6 +83,27 @@ export default function Dashboard() {
     const successRate = results && results.length > 0
         ? Math.round((deliveredCount / results.length) * 100)
         : 0;
+
+    const broadcastSuccessCount = broadcastResults.filter((r) => r.status === 'success').length;
+    const broadcastFailedCount = broadcastResults.filter((r) => r.status === 'failed').length;
+
+    const formatElapsed = useCallback((startTime: number | null) => {
+        if (!startTime) return '0:00';
+        const seconds = Math.floor((Date.now() - startTime) / 1000);
+        const m = Math.floor(seconds / 60);
+        const s = seconds % 60;
+        return `${m}:${s.toString().padStart(2, '0')}`;
+    }, []);
+
+    // Live elapsed time ticker
+    const [elapsedDisplay, setElapsedDisplay] = useState('0:00');
+    useEffect(() => {
+        if (!isBroadcasting || !broadcastStartTime) return;
+        const timer = setInterval(() => {
+            setElapsedDisplay(formatElapsed(broadcastStartTime));
+        }, 1000);
+        return () => clearInterval(timer);
+    }, [isBroadcasting, broadcastStartTime, formatElapsed]);
 
     const onDrop = (acceptedFiles: File[]) => {
         const images = acceptedFiles.filter(f => f.type.startsWith('image/'));
@@ -395,8 +425,18 @@ export default function Dashboard() {
         if (!file || !aiResult || recipients.length === 0) return;
 
         setIsProcessing(true);
+        setIsBroadcasting(true);
+        setBroadcastProgress(0);
+        setBroadcastResults([]);
+        setCurrentRecipientEmail('');
+        setBroadcastPendingCount(0);
+        broadcastAbortRef.current = false;
+        const startTime = Date.now();
+        setBroadcastStartTime(startTime);
+        setElapsedDisplay('0:00');
+
         const baseBuffer = await file.arrayBuffer();
-        const defaultCertBuffer = Array.from(new Uint8Array(baseBuffer));
+        const defaultCertBuf = Array.from(new Uint8Array(baseBuffer));
 
         try {
             // Save/Update current sender profile if not empty
@@ -424,64 +464,117 @@ export default function Dashboard() {
 
                 recipientData = await Promise.all(driveMatches.map(async (match) => {
                     let buffer: number[] | undefined;
-                    let isCustom = false;
                     if (match.fileId) {
                         const driveBuffer = await downloadDriveFile(match.fileId, match.resourceKey);
                         if (driveBuffer) {
                             buffer = Array.from(driveBuffer);
-                            isCustom = true;
                         } else {
                             const matchedLocalCert = matchCert(match.name);
                             if (matchedLocalCert) {
                                 buffer = Array.from(new Uint8Array(await matchedLocalCert.arrayBuffer()));
-                                isCustom = true;
                             }
                         }
                     } else {
-                        const matchedCert = matchCert(match.name);
-                        if (matchedCert) {
-                            buffer = Array.from(new Uint8Array(await matchedCert.arrayBuffer()));
-                            isCustom = true;
+                        const matchedCertFile = matchCert(match.name);
+                        if (matchedCertFile) {
+                            buffer = Array.from(new Uint8Array(await matchedCertFile.arrayBuffer()));
                         }
                     }
                     return {
                         name: match.name,
                         email: match.email,
                         certBuffer: buffer,
-                        isCustom,
                     };
                 }));
             } else {
                 // Fallback: use local file matching
                 recipientData = await Promise.all(recipients.map(async (r) => {
-                    const matchedCert = matchCert(r.name);
+                    const matchedCertFile = matchCert(r.name);
                     let buffer: number[] | undefined;
-                    if (matchedCert) {
-                        buffer = Array.from(new Uint8Array(await matchedCert.arrayBuffer()));
+                    if (matchedCertFile) {
+                        buffer = Array.from(new Uint8Array(await matchedCertFile.arrayBuffer()));
                     }
                     return {
                         ...r,
                         certBuffer: buffer,
-                        isCustom: !!matchedCert
                     };
                 }));
             }
 
-            const res = await sendBroadcastAction({
+            // Create broadcast session
+            setCurrentRecipientEmail('Membuat sesi broadcast...');
+            const broadcastSession = await createBroadcastSession({
                 recipients: recipientData,
-                defaultCertBuffer,
+                defaultCertBuffer: defaultCertBuf,
                 caption: editedCaption,
                 eventName: aiResult.eventName,
                 eventDate: aiResult.eventDate,
                 sender: senderForm,
-                youtubeUrl: youtubeUrl.trim() || undefined
+                youtubeUrl: youtubeUrl.trim() || undefined,
             });
-            setResults(res);
+
+            const { broadcastId, immediateRecipients, pendingCount: pCount, defaultCertBuffer: sessionCertBuffer } = broadcastSession;
+            setBroadcastTotal(immediateRecipients.length);
+            setBroadcastPendingCount(pCount);
+
+            // Add pending results
+            if (pCount > 0) {
+                const pendingResults = recipientData.slice(immediateRecipients.length).map((r) => ({
+                    email: r.email,
+                    status: 'pending',
+                }));
+                setBroadcastResults(prev => [...prev, ...pendingResults]);
+            }
+
+            // Send emails one by one with progress
+            const emailDelayMs = 5000;
+            const allResults: SendResult[] = [];
+
+            for (let i = 0; i < immediateRecipients.length; i++) {
+                if (broadcastAbortRef.current) break;
+
+                const recipient = immediateRecipients[i];
+                setCurrentRecipientEmail(recipient.email);
+                setBroadcastProgress(i + 1);
+
+                const result = await sendSingleEmail({
+                    broadcastId,
+                    recipient,
+                    defaultCertBuffer: sessionCertBuffer,
+                    caption: editedCaption,
+                    eventName: aiResult.eventName,
+                    eventDate: aiResult.eventDate,
+                    sender: senderForm,
+                    youtubeUrl: youtubeUrl.trim() || undefined,
+                });
+
+                allResults.push(result);
+                setBroadcastResults(prev => [...prev, result]);
+
+                // Delay between emails (except last)
+                if (i < immediateRecipients.length - 1 && !broadcastAbortRef.current) {
+                    await new Promise(resolve => setTimeout(resolve, emailDelayMs));
+                }
+            }
+
+            // Add pending results to final results
+            if (pCount > 0) {
+                const pendingFinalResults = recipientData.slice(immediateRecipients.length).map((r) => ({
+                    email: r.email,
+                    status: 'pending',
+                }));
+                allResults.push(...pendingFinalResults);
+            }
+
+            setResults(allResults);
         } catch (error) {
             console.error(error);
-            alert('Failed to send broadcast');
+            alert('Failed to send broadcast: ' + (error instanceof Error ? error.message : 'Unknown error'));
         } finally {
             setIsProcessing(false);
+            setIsBroadcasting(false);
+            setBroadcastStartTime(null);
+            setCurrentRecipientEmail('');
         }
     };
 
@@ -909,7 +1002,7 @@ export default function Dashboard() {
                                         >
                                             <span className="relative z-10 flex items-center gap-3">
                                                 {isProcessing ? <Loader2 className="animate-spin w-6 h-6" /> : <Send className="w-5 h-5" />}
-                                                {isProcessing ? 'Deploying...' : 'Blast Broadcast'}
+                                                {isProcessing ? 'Mengirim...' : 'Blast Broadcast'}
                                             </span>
                                             <motion.div
                                                 className="absolute inset-0 bg-white/10"
@@ -1067,6 +1160,112 @@ export default function Dashboard() {
                     </div>
                 </div>
             )}
+
+            {/* Broadcast Progress Modal */}
+            <AnimatePresence>
+                {isBroadcasting && (
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="fixed inset-0 z-[120] bg-black/90 backdrop-blur-md flex items-center justify-center p-4"
+                    >
+                        <motion.div
+                            initial={{ scale: 0.95, opacity: 0 }}
+                            animate={{ scale: 1, opacity: 1 }}
+                            exit={{ scale: 0.95, opacity: 0 }}
+                            className="w-full max-w-lg bg-[#1a1a1c] border border-white/10 rounded-2xl overflow-hidden"
+                        >
+                            {/* Header */}
+                            <div className="px-6 py-5 border-b border-white/5">
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-10 h-10 rounded-xl bg-[#2997ff]/20 flex items-center justify-center">
+                                            <Send className="w-5 h-5 text-[#2997ff]" />
+                                        </div>
+                                        <div>
+                                            <h3 className="text-base font-semibold">Broadcasting</h3>
+                                            <p className="text-[11px] text-[#86868b]">{elapsedDisplay} berlangsung</p>
+                                        </div>
+                                    </div>
+                                    <div className="text-right">
+                                        <p className="text-2xl font-bold tabular-nums">
+                                            {broadcastProgress}<span className="text-[#86868b] text-lg">/{broadcastTotal}</span>
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Progress Bar */}
+                            <div className="px-6 pt-5">
+                                <div className="w-full bg-white/5 rounded-full h-2.5 overflow-hidden">
+                                    <motion.div
+                                        className="h-full bg-gradient-to-r from-[#66b6ff] to-[#2997ff] rounded-full"
+                                        initial={{ width: 0 }}
+                                        animate={{ width: broadcastTotal > 0 ? `${(broadcastProgress / broadcastTotal) * 100}%` : '0%' }}
+                                        transition={{ duration: 0.3 }}
+                                    />
+                                </div>
+                                <p className="text-[11px] text-[#86868b] mt-2 text-right">
+                                    {broadcastTotal > 0 ? Math.round((broadcastProgress / broadcastTotal) * 100) : 0}%
+                                </p>
+                            </div>
+
+                            {/* Current Email */}
+                            <div className="px-6 py-4">
+                                <p className="text-[10px] font-bold uppercase tracking-widest text-[#86868b] mb-1">Sedang mengirim</p>
+                                <p className="text-sm text-white font-mono truncate">{currentRecipientEmail || '...'}</p>
+                            </div>
+
+                            {/* Stats */}
+                            <div className="px-6 pb-5">
+                                <div className="grid grid-cols-3 gap-3">
+                                    <div className="bg-[#30d158]/10 border border-[#30d158]/20 rounded-xl p-3 text-center">
+                                        <p className="text-xl font-bold text-[#30d158] tabular-nums">{broadcastSuccessCount}</p>
+                                        <p className="text-[10px] uppercase tracking-widest text-[#30d158]/80 font-semibold">Terkirim</p>
+                                    </div>
+                                    <div className="bg-[#ff453a]/10 border border-[#ff453a]/20 rounded-xl p-3 text-center">
+                                        <p className="text-xl font-bold text-[#ff453a] tabular-nums">{broadcastFailedCount}</p>
+                                        <p className="text-[10px] uppercase tracking-widest text-[#ff453a]/80 font-semibold">Gagal</p>
+                                    </div>
+                                    <div className="bg-[#ff9f0a]/10 border border-[#ff9f0a]/20 rounded-xl p-3 text-center">
+                                        <p className="text-xl font-bold text-[#ff9f0a] tabular-nums">{broadcastPendingCount}</p>
+                                        <p className="text-[10px] uppercase tracking-widest text-[#ff9f0a]/80 font-semibold">Pending</p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Recent Activity */}
+                            {broadcastResults.length > 0 && (
+                                <div className="px-6 pb-5">
+                                    <p className="text-[10px] font-bold uppercase tracking-widest text-[#86868b] mb-2">Aktivitas Terakhir</p>
+                                    <div className="max-h-32 overflow-y-auto space-y-1 rounded-xl bg-black/30 border border-white/5 p-2">
+                                        {[...broadcastResults].reverse().slice(0, 20).map((r, i) => (
+                                            <div key={i} className="flex items-center justify-between px-2 py-1 text-xs">
+                                                <span className="truncate text-[#a1a1a6] font-mono">{r.email}</span>
+                                                <span className={`text-[10px] font-bold uppercase tracking-widest flex-shrink-0 ml-2 ${r.status === 'success' ? 'text-[#30d158]' : r.status === 'pending' ? 'text-[#ff9f0a]' : 'text-[#ff453a]'
+                                                    }`}>
+                                                    {r.status === 'success' ? '✓' : r.status === 'pending' ? '⏳' : '✗'}
+                                                </span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Cancel */}
+                            <div className="px-6 pb-5">
+                                <button
+                                    onClick={() => { broadcastAbortRef.current = true; }}
+                                    className="w-full py-2.5 rounded-xl border border-white/10 bg-white/5 text-[#86868b] hover:text-white hover:bg-white/10 transition-all text-xs font-semibold"
+                                >
+                                    Hentikan Pengiriman
+                                </button>
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
         </div>
     );
 }
