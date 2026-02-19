@@ -37,7 +37,7 @@ export const senderSchema = z.object({
 export const broadcastInputSchema = z.object({
     recipients: z.array(z.object({
         name: z.string().min(1).max(100),
-        email: z.string().min(1).max(255).refine(val => val.includes('@'), { message: 'Email harus mengandung @' }),
+        email: z.string().min(1).max(255),
         certBuffer: z.array(z.number()).optional(),
     })).min(1).max(5000),
     defaultCertBuffer: z.array(z.number()).optional(),

@@ -424,6 +424,16 @@ export default function Dashboard() {
     const handleSend = async () => {
         if (!file || !aiResult || recipients.length === 0) return;
 
+        // Filter out recipients with invalid emails
+        const validRecipients = recipients.filter(r => r.email && r.email.includes('@'));
+        if (validRecipients.length === 0) {
+            alert('Tidak ada penerima dengan email yang valid.');
+            return;
+        }
+        if (validRecipients.length < recipients.length) {
+            console.warn(`Skipped ${recipients.length - validRecipients.length} recipients with invalid emails`);
+        }
+
         setIsProcessing(true);
         setIsBroadcasting(true);
         setBroadcastProgress(0);
@@ -453,7 +463,7 @@ export default function Dashboard() {
             if (certFolderPath.trim()) {
                 setCurrentRecipientEmail('Mengecek sertifikat di Google Drive...');
                 const { fetchCertificatesFromDrive, downloadDriveFile } = await import('./actions/gdrive');
-                const driveMatches = await fetchCertificatesFromDrive(certFolderPath.trim(), recipients);
+                const driveMatches = await fetchCertificatesFromDrive(certFolderPath.trim(), validRecipients);
 
                 const unmatchedRecipients = driveMatches
                     .filter((match) => !match.fileId && !matchCert(match.name))
@@ -473,7 +483,7 @@ export default function Dashboard() {
             // Create broadcast session (fast - no cert data)
             setCurrentRecipientEmail('Membuat sesi broadcast...');
             const broadcastSession = await createBroadcastSession({
-                recipients: recipients.map(r => ({ name: r.name, email: r.email })),
+                recipients: validRecipients.map(r => ({ name: r.name, email: r.email })),
                 defaultCertBuffer: defaultCertBuf,
                 caption: editedCaption,
                 eventName: aiResult.eventName,
@@ -507,7 +517,7 @@ export default function Dashboard() {
             };
 
             // Phase 1: Send immediate emails (download 1 → send 1)
-            const immediateRecipients = recipients.slice(0, immediateCount);
+            const immediateRecipients = validRecipients.slice(0, immediateCount);
             for (let i = 0; i < immediateRecipients.length; i++) {
                 if (broadcastAbortRef.current) break;
 
@@ -540,7 +550,7 @@ export default function Dashboard() {
 
             // Phase 2: Queue pending recipients (download 1 → queue 1)
             if (pCount > 0) {
-                const pendingRecipients = recipients.slice(immediateCount);
+                const pendingRecipients = validRecipients.slice(immediateCount);
                 for (let i = 0; i < pendingRecipients.length; i++) {
                     if (broadcastAbortRef.current) break;
 
