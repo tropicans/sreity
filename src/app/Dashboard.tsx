@@ -440,6 +440,7 @@ export default function Dashboard() {
 
         try {
             // Save/Update current sender profile if not empty
+            setCurrentRecipientEmail('Menyimpan profil pengirim...');
             if (senderForm.name && senderForm.department) {
                 const { saveSenderProfile } = await import('./actions/sender');
                 await saveSenderProfile(senderForm);
@@ -448,6 +449,7 @@ export default function Dashboard() {
             // Fetch certificates from Google Drive if folder ID is provided
             let recipientData;
             if (certFolderPath.trim()) {
+                setCurrentRecipientEmail('Mengambil sertifikat dari Google Drive...');
                 const { fetchCertificatesFromDrive, downloadDriveFile } = await import('./actions/gdrive');
                 const driveMatches = await fetchCertificatesFromDrive(certFolderPath.trim(), recipients);
 
@@ -462,6 +464,7 @@ export default function Dashboard() {
                     );
                 }
 
+                setCurrentRecipientEmail(`Mendownload ${driveMatches.length} sertifikat...`);
                 recipientData = await Promise.all(driveMatches.map(async (match) => {
                     let buffer: number[] | undefined;
                     if (match.fileId) {
@@ -488,6 +491,7 @@ export default function Dashboard() {
                 }));
             } else {
                 // Fallback: use local file matching
+                setCurrentRecipientEmail('Mencocokkan sertifikat lokal...');
                 recipientData = await Promise.all(recipients.map(async (r) => {
                     const matchedCertFile = matchCert(r.name);
                     let buffer: number[] | undefined;
