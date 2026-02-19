@@ -674,7 +674,7 @@ export async function createBroadcastSession({
     sender,
     youtubeUrl,
 }: {
-    recipients: { name: string; email: string; certBuffer?: number[] }[];
+    recipients: { name: string; email: string }[];
     defaultCertBuffer?: number[];
     caption: string;
     eventName: string;
@@ -683,7 +683,7 @@ export async function createBroadcastSession({
     youtubeUrl?: string;
 }): Promise<{
     broadcastId: string;
-    immediateRecipients: { name: string; email: string; certBuffer?: number[] }[];
+    immediateCount: number;
     pendingCount: number;
     defaultCertBuffer: number[];
 }> {
@@ -718,80 +718,100 @@ export async function createBroadcastSession({
         throw new Error('Invalid YouTube URL. Only youtube.com and youtu.be URLs are allowed.');
     }
 
+    if (!defaultCertBuffer || defaultCertBuffer.length === 0) {
+        throw new Error('Sertifikat tidak ditemukan. Upload file sertifikat default.');
+    }
+
     const safeEventName = sanitizeHtml(eventName);
     const safeEventDate = sanitizeHtml(eventDate);
-
-    const firstAvailableCertificate = recipients.find((r) => r.certBuffer && r.certBuffer.length > 0)?.certBuffer
-        || defaultCertBuffer;
-
-    if (!firstAvailableCertificate || firstAvailableCertificate.length === 0) {
-        throw new Error('Sertifikat tidak ditemukan. Upload file sertifikat default atau pastikan tiap penerima punya sertifikat.');
-    }
 
     const broadcast = await prisma.broadcast.create({
         data: {
             eventName: safeEventName,
             eventDate: safeEventDate,
             caption,
-            certificate: Buffer.from(firstAvailableCertificate),
+            certificate: Buffer.from(defaultCertBuffer),
         },
     });
 
     const immediateBatchLimit = getImmediateBatchLimit();
     const immediateSendCount = Math.min(gmailSafeDailyLimit, immediateBatchLimit);
 
-    const immediateRecipients = emailProvider === 'gmail'
-        ? recipients.slice(0, immediateSendCount)
-        : recipients;
-    const pendingRecipients = emailProvider === 'gmail'
-        ? recipients.slice(immediateSendCount)
-        : [];
-
-    // Queue pending recipients
-    if (pendingRecipients.length > 0) {
-        const scheduledFor = new Date(Date.now() + getPendingDelayHours() * 60 * 60 * 1000);
-
-        const pendingEmailRows = pendingRecipients.map((recipient) => {
-            const { subject, html } = buildEmailTemplate({
-                recipientName: recipient.name,
-                caption,
-                eventName,
-                eventDate,
-                sender,
-                youtubeUrl,
-            });
-
-            return {
-                name: recipient.name,
-                email: recipient.email,
-                subject,
-                html,
-                certificateFilename: `Sertifikat_${recipient.name.replace(/\s+/g, '_')}.pdf`,
-                certificate: Buffer.from(recipient.certBuffer && recipient.certBuffer.length > 0 ? recipient.certBuffer : firstAvailableCertificate),
-                status: 'pending',
-                scheduledFor,
-                broadcastId: broadcast.id,
-            };
-        });
-
-        await prisma.pendingEmail.createMany({ data: pendingEmailRows });
-
-        await prisma.recipient.createMany({
-            data: pendingRecipients.map((recipient) => ({
-                name: recipient.name,
-                email: recipient.email,
-                status: 'pending',
-                broadcastId: broadcast.id,
-            })),
-        });
-    }
+    const immediateCount = emailProvider === 'gmail'
+        ? Math.min(recipients.length, immediateSendCount)
+        : recipients.length;
+    const pendingCount = emailProvider === 'gmail'
+        ? Math.max(0, recipients.length - immediateSendCount)
+        : 0;
 
     return {
         broadcastId: broadcast.id,
-        immediateRecipients,
-        pendingCount: pendingRecipients.length,
-        defaultCertBuffer: Array.from(firstAvailableCertificate),
+        immediateCount,
+        pendingCount,
+        defaultCertBuffer: Array.from(defaultCertBuffer),
     };
+}
+
+export async function queuePendingRecipient({
+    broadcastId,
+    recipient,
+    certBuffer,
+    defaultCertBuffer,
+    caption,
+    eventName,
+    eventDate,
+    sender,
+    youtubeUrl,
+}: {
+    broadcastId: string;
+    recipient: { name: string; email: string };
+    certBuffer?: number[];
+    defaultCertBuffer: number[];
+    caption: string;
+    eventName: string;
+    eventDate: string;
+    sender: { name: string; department: string; contact: string };
+    youtubeUrl?: string;
+}): Promise<{ email: string; status: string }> {
+    await ensureAuthenticatedUser();
+
+    const scheduledFor = new Date(Date.now() + getPendingDelayHours() * 60 * 60 * 1000);
+
+    const { subject, html } = buildEmailTemplate({
+        recipientName: recipient.name,
+        caption,
+        eventName,
+        eventDate,
+        sender,
+        youtubeUrl,
+    });
+
+    const cert = certBuffer && certBuffer.length > 0 ? certBuffer : defaultCertBuffer;
+
+    await prisma.pendingEmail.create({
+        data: {
+            name: recipient.name,
+            email: recipient.email,
+            subject,
+            html,
+            certificateFilename: `Sertifikat_${recipient.name.replace(/\s+/g, '_')}.pdf`,
+            certificate: Buffer.from(cert),
+            status: 'pending',
+            scheduledFor,
+            broadcastId,
+        },
+    });
+
+    await prisma.recipient.create({
+        data: {
+            name: recipient.name,
+            email: recipient.email,
+            status: 'pending',
+            broadcastId,
+        },
+    });
+
+    return { email: recipient.email, status: 'pending' };
 }
 
 export async function sendSingleEmail({

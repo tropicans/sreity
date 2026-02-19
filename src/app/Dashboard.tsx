@@ -6,7 +6,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useDropzone } from 'react-dropzone';
 import Papa from 'papaparse';
 import Image from 'next/image';
-import { analyzeCertificateAction, sendBroadcastAction, generateEmailPreviewAction, sendTestEmailAction, createBroadcastSession, sendSingleEmail } from './actions/broadcast';
+import { analyzeCertificateAction, sendBroadcastAction, generateEmailPreviewAction, sendTestEmailAction, createBroadcastSession, sendSingleEmail, queuePendingRecipient } from './actions/broadcast';
 import { signOut, useSession } from 'next-auth/react';
 
 type Recipient = { name: string; email: string };
@@ -446,10 +446,12 @@ export default function Dashboard() {
                 await saveSenderProfile(senderForm);
             }
 
-            // Fetch certificates from Google Drive if folder ID is provided
-            let recipientData;
+            // Prepare Drive file mapping (if using Drive)
+            let driveMatchMap: Map<string, { fileId?: string | null; resourceKey?: string | null }> | null = null;
+            let downloadDriveFileFn: ((fileId: string, resourceKey?: string | null) => Promise<Buffer | null>) | null = null;
+
             if (certFolderPath.trim()) {
-                setCurrentRecipientEmail('Mengambil sertifikat dari Google Drive...');
+                setCurrentRecipientEmail('Mengecek sertifikat di Google Drive...');
                 const { fetchCertificatesFromDrive, downloadDriveFile } = await import('./actions/gdrive');
                 const driveMatches = await fetchCertificatesFromDrive(certFolderPath.trim(), recipients);
 
@@ -464,51 +466,14 @@ export default function Dashboard() {
                     );
                 }
 
-                setCurrentRecipientEmail(`Mendownload ${driveMatches.length} sertifikat...`);
-                recipientData = await Promise.all(driveMatches.map(async (match) => {
-                    let buffer: number[] | undefined;
-                    if (match.fileId) {
-                        const driveBuffer = await downloadDriveFile(match.fileId, match.resourceKey);
-                        if (driveBuffer) {
-                            buffer = Array.from(driveBuffer);
-                        } else {
-                            const matchedLocalCert = matchCert(match.name);
-                            if (matchedLocalCert) {
-                                buffer = Array.from(new Uint8Array(await matchedLocalCert.arrayBuffer()));
-                            }
-                        }
-                    } else {
-                        const matchedCertFile = matchCert(match.name);
-                        if (matchedCertFile) {
-                            buffer = Array.from(new Uint8Array(await matchedCertFile.arrayBuffer()));
-                        }
-                    }
-                    return {
-                        name: match.name,
-                        email: match.email,
-                        certBuffer: buffer,
-                    };
-                }));
-            } else {
-                // Fallback: use local file matching
-                setCurrentRecipientEmail('Mencocokkan sertifikat lokal...');
-                recipientData = await Promise.all(recipients.map(async (r) => {
-                    const matchedCertFile = matchCert(r.name);
-                    let buffer: number[] | undefined;
-                    if (matchedCertFile) {
-                        buffer = Array.from(new Uint8Array(await matchedCertFile.arrayBuffer()));
-                    }
-                    return {
-                        ...r,
-                        certBuffer: buffer,
-                    };
-                }));
+                driveMatchMap = new Map(driveMatches.map(m => [m.email, { fileId: m.fileId, resourceKey: m.resourceKey }]));
+                downloadDriveFileFn = downloadDriveFile;
             }
 
-            // Create broadcast session
+            // Create broadcast session (fast - no cert data)
             setCurrentRecipientEmail('Membuat sesi broadcast...');
             const broadcastSession = await createBroadcastSession({
-                recipients: recipientData,
+                recipients: recipients.map(r => ({ name: r.name, email: r.email })),
                 defaultCertBuffer: defaultCertBuf,
                 caption: editedCaption,
                 eventName: aiResult.eventName,
@@ -517,33 +482,45 @@ export default function Dashboard() {
                 youtubeUrl: youtubeUrl.trim() || undefined,
             });
 
-            const { broadcastId, immediateRecipients, pendingCount: pCount, defaultCertBuffer: sessionCertBuffer } = broadcastSession;
-            setBroadcastTotal(immediateRecipients.length);
+            const { broadcastId, immediateCount, pendingCount: pCount, defaultCertBuffer: sessionCertBuffer } = broadcastSession;
+            setBroadcastTotal(immediateCount + pCount);
             setBroadcastPendingCount(pCount);
 
-            // Add pending results
-            if (pCount > 0) {
-                const pendingResults = recipientData.slice(immediateRecipients.length).map((r) => ({
-                    email: r.email,
-                    status: 'pending',
-                }));
-                setBroadcastResults(prev => [...prev, ...pendingResults]);
-            }
-
-            // Send emails one by one with progress
-            const emailDelayMs = 5000;
             const allResults: SendResult[] = [];
+            const emailDelayMs = 5000;
 
+            // Helper: download cert for a single recipient
+            const downloadCertForRecipient = async (recipient: { name: string; email: string }): Promise<number[] | undefined> => {
+                if (driveMatchMap && downloadDriveFileFn) {
+                    const driveInfo = driveMatchMap.get(recipient.email);
+                    if (driveInfo?.fileId) {
+                        const driveBuffer = await downloadDriveFileFn(driveInfo.fileId, driveInfo.resourceKey);
+                        if (driveBuffer) return Array.from(new Uint8Array(driveBuffer));
+                    }
+                }
+                // Fallback to local cert
+                const matchedCertFile = matchCert(recipient.name);
+                if (matchedCertFile) {
+                    return Array.from(new Uint8Array(await matchedCertFile.arrayBuffer()));
+                }
+                return undefined;
+            };
+
+            // Phase 1: Send immediate emails (download 1 → send 1)
+            const immediateRecipients = recipients.slice(0, immediateCount);
             for (let i = 0; i < immediateRecipients.length; i++) {
                 if (broadcastAbortRef.current) break;
 
                 const recipient = immediateRecipients[i];
-                setCurrentRecipientEmail(recipient.email);
+                setCurrentRecipientEmail(`Mendownload sertifikat ${recipient.name}...`);
                 setBroadcastProgress(i + 1);
 
+                const certBuffer = await downloadCertForRecipient(recipient);
+
+                setCurrentRecipientEmail(`Mengirim ke ${recipient.email}...`);
                 const result = await sendSingleEmail({
                     broadcastId,
-                    recipient,
+                    recipient: { ...recipient, certBuffer },
                     defaultCertBuffer: sessionCertBuffer,
                     caption: editedCaption,
                     eventName: aiResult.eventName,
@@ -561,13 +538,34 @@ export default function Dashboard() {
                 }
             }
 
-            // Add pending results to final results
+            // Phase 2: Queue pending recipients (download 1 → queue 1)
             if (pCount > 0) {
-                const pendingFinalResults = recipientData.slice(immediateRecipients.length).map((r) => ({
-                    email: r.email,
-                    status: 'pending',
-                }));
-                allResults.push(...pendingFinalResults);
+                const pendingRecipients = recipients.slice(immediateCount);
+                for (let i = 0; i < pendingRecipients.length; i++) {
+                    if (broadcastAbortRef.current) break;
+
+                    const recipient = pendingRecipients[i];
+                    const progressIdx = immediateCount + i + 1;
+                    setCurrentRecipientEmail(`Menyimpan pending: ${recipient.name}...`);
+                    setBroadcastProgress(progressIdx);
+
+                    const certBuffer = await downloadCertForRecipient(recipient);
+
+                    const result = await queuePendingRecipient({
+                        broadcastId,
+                        recipient,
+                        certBuffer,
+                        defaultCertBuffer: sessionCertBuffer,
+                        caption: editedCaption,
+                        eventName: aiResult.eventName,
+                        eventDate: aiResult.eventDate,
+                        sender: senderForm,
+                        youtubeUrl: youtubeUrl.trim() || undefined,
+                    });
+
+                    allResults.push(result);
+                    setBroadcastResults(prev => [...prev, result]);
+                }
             }
 
             setResults(allResults);
