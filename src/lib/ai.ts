@@ -20,9 +20,10 @@ export async function analyzeCertificate(imageBuffer: Buffer) {
             1. Extract the name of the recipient.
             2. Extract the name of the event/webinar.
             3. Extract the date of the event.
-            4. Generate a warm, professional email caption for broadcasting this certificate to the recipient. 
-            The caption should be in Indonesian, similar to the tone in the example: "Yth. Bapak/Ibu [Nama], Salam hangat...".
-            Include placeholders like [Nama] if needed.
+            4. Generate a warm, professional email caption for broadcasting this certificate to the recipient.
+            The caption should be in Indonesian, similar to the tone: "Yth. Bapak/Ibu [Nama], Salam hangat...".
+            Use ONLY the placeholder [Nama] for the recipient's name. Do NOT use any other placeholders such as [Panitia], [Instansi], [Penyelenggara], etc.
+            End the caption body BEFORE any closing/signature. Do NOT include sender name, institution name, or contact info — those are added automatically by the system.
             
             Return the result in JSON format:
             {

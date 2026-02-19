@@ -158,7 +158,7 @@ function buildEmailTemplate({
     sender,
     youtubeUrl,
 }: EmailTemplateInput): { subject: string; html: string } {
-    const personalizedCaptionRaw = caption
+    let personalizedCaptionRaw = caption
         .replace(/\[Nama\]/g, recipientName)
         .replace(/\[Nama Pengirim\]/g, sender.name)
         .replace(/\[Nama Penyelenggara\/Tim\]/g, sender.name)
@@ -167,10 +167,14 @@ function buildEmailTemplate({
         .replace(/\[Nama Penyelenggara\/Instansi\]/g, sender.name)
         .replace(/\[Nama Instansi\]/g, sender.department || sender.name)
         .replace(/\[Panitia\/Instansi\]/g, sender.name)
+        .replace(/\[Panitia\/Institusi\]/g, sender.name)
         .replace(/\[Panitia\]/g, sender.name)
         .replace(/\[Instansi\]/g, sender.department || sender.name)
         .replace(/\[Instansi\/Unit\]/g, sender.department)
         .replace(/\[Kontak\]/g, sender.contact || '');
+
+    // Safety net: strip any remaining [...] placeholders the AI may have invented
+    personalizedCaptionRaw = personalizedCaptionRaw.replace(/\[[^\]]{2,40}\]/g, '').replace(/\s{2,}/g, ' ').trim();
 
     const personalizedCaption = normalizeCaption(personalizedCaptionRaw);
 
