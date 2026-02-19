@@ -424,14 +424,56 @@ export default function Dashboard() {
     const handleSend = async () => {
         if (!file || !aiResult || recipients.length === 0) return;
 
+        // Auto-correct common email typos
+        const autoCorrectEmail = (email: string): string => {
+            let fixed = email.trim().toLowerCase();
+            // Remove spaces
+            fixed = fixed.replace(/\s+/g, '');
+            // Fix common domain typos
+            fixed = fixed.replace(/@gmail\.con$/, '@gmail.com');
+            fixed = fixed.replace(/@gmail\.cim$/, '@gmail.com');
+            fixed = fixed.replace(/@gmail\.cok$/, '@gmail.com');
+            fixed = fixed.replace(/@gmail\.co$/, '@gmail.com');
+            fixed = fixed.replace(/@gmai\.com$/, '@gmail.com');
+            fixed = fixed.replace(/@gmal\.com$/, '@gmail.com');
+            fixed = fixed.replace(/@gmial\.com$/, '@gmail.com');
+            fixed = fixed.replace(/@gamil\.com$/, '@gmail.com');
+            fixed = fixed.replace(/@yaho\.com$/, '@yahoo.com');
+            fixed = fixed.replace(/@yahooo\.com$/, '@yahoo.com');
+            fixed = fixed.replace(/@hmail\.com$/, '@gmail.com');
+            // Fix missing .com for common domains
+            if (fixed.match(/@gmail$/) || fixed.match(/@yahoo$/) || fixed.match(/@outlook$/)) {
+                fixed += '.com';
+            }
+            // Fix .co.id typos for gmail
+            fixed = fixed.replace(/@gmail\.co\.id$/, '@gmail.com');
+            return fixed;
+        };
+
+        const correctedRecipients = recipients.map(r => ({
+            ...r,
+            email: autoCorrectEmail(r.email),
+        }));
+
+        // Log corrections
+        const corrections = recipients
+            .map((orig, i) => ({ orig: orig.email, fixed: correctedRecipients[i].email, name: orig.name }))
+            .filter(c => c.orig !== c.fixed);
+        if (corrections.length > 0) {
+            console.warn('Auto-corrected emails:', corrections);
+            alert(`${corrections.length} email di-koreksi otomatis:\n${corrections.map(c => `• ${c.name}: ${c.orig} → ${c.fixed}`).join('\n')}`);
+        }
+
         // Filter out recipients with invalid emails
-        const validRecipients = recipients.filter(r => r.email && r.email.includes('@'));
+        const validRecipients = correctedRecipients.filter(r => r.email && r.email.includes('@') && r.email.includes('.'));
         if (validRecipients.length === 0) {
             alert('Tidak ada penerima dengan email yang valid.');
             return;
         }
-        if (validRecipients.length < recipients.length) {
-            console.warn(`Skipped ${recipients.length - validRecipients.length} recipients with invalid emails`);
+        if (validRecipients.length < correctedRecipients.length) {
+            const invalidRecipients = correctedRecipients.filter(r => !r.email || !r.email.includes('@') || !r.email.includes('.'));
+            console.warn('Skipped invalid recipients:', invalidRecipients);
+            alert(`${invalidRecipients.length} penerima di-skip karena email tidak valid:\n${invalidRecipients.map(r => `• ${r.name} (${r.email || 'kosong'})`).join('\n')}`);
         }
 
         setIsProcessing(true);
