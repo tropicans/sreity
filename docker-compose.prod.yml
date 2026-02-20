@@ -25,8 +25,8 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: always
-    expose:
-      - "3005"
+    ports:
+      - "3005:3005"
     environment:
       - NODE_ENV=production
       - DATABASE_URL=postgresql://postgres:${DB_PASSWORD}@db:5432/sertify?schema=public
