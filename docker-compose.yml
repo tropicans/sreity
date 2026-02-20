@@ -33,8 +33,22 @@ services:
       - NEXTAUTH_URL=${NEXTAUTH_URL}
       - ALLOWED_EMAILS=${ALLOWED_EMAILS}
       - ALLOWED_DOMAINS=${ALLOWED_DOMAINS}
+      - CRON_SECRET=${CRON_SECRET:-sertify-cron-secret-2026}
     depends_on:
       - db
+
+  cron:
+    image: alpine:3.19
+    restart: always
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        apk add --no-cache curl
+        echo "*/30 * * * * curl -sf 'http://app:3005/api/cron/process-pending?secret=${CRON_SECRET:-sertify-cron-secret-2026}'" | crontab -
+        crond -f -l 2
+    depends_on:
+      - app
 
 volumes:
   postgres_data:
