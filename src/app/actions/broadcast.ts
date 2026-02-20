@@ -901,13 +901,13 @@ export async function getBroadcastHistory() {
             _count: {
                 select: {
                     recipients: true,
-                    pendingEmails: true,
                 },
             },
         },
     });
 
-    // Get detailed stats per broadcast
+    // Get detailed stats per broadcast — based on Recipient table only
+    // Each person has exactly ONE Recipient record, so no double-counting
     const results = await Promise.all(broadcasts.map(async (b) => {
         const recipientStats = await prisma.recipient.groupBy({
             by: ['status'],
@@ -915,18 +915,9 @@ export async function getBroadcastHistory() {
             _count: true,
         });
 
-        const pendingStats = await prisma.pendingEmail.groupBy({
-            by: ['status'],
-            where: { broadcastId: b.id },
-            _count: true,
-        });
-
         const sent = recipientStats.find(s => s.status === 'success')?._count || 0;
         const failed = recipientStats.find(s => s.status === 'failed')?._count || 0;
-        const pendingFromRecipients = recipientStats.find(s => s.status === 'pending')?._count || 0;
-        const pendingFromEmails = pendingStats.find(s => s.status === 'pending')?._count || 0;
-        const sentFromPending = pendingStats.find(s => s.status === 'sent')?._count || 0;
-        const failedFromPending = pendingStats.find(s => s.status === 'failed')?._count || 0;
+        const pending = recipientStats.find(s => s.status === 'pending')?._count || 0;
 
         return {
             id: b.id,
@@ -934,10 +925,10 @@ export async function getBroadcastHistory() {
             eventDate: b.eventDate,
             createdAt: b.createdAt.toISOString(),
             stats: {
-                sent: sent + sentFromPending,
-                failed: failed + failedFromPending,
-                pending: pendingFromEmails,
-                total: sent + failed + pendingFromRecipients + pendingFromEmails + sentFromPending + failedFromPending,
+                sent,
+                failed,
+                pending,
+                total: sent + failed + pending,
             },
         };
     }));
