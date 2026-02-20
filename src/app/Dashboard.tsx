@@ -6,7 +6,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useDropzone } from 'react-dropzone';
 import Papa from 'papaparse';
 import Image from 'next/image';
-import { analyzeCertificateAction, sendBroadcastAction, generateEmailPreviewAction, sendTestEmailAction, createBroadcastSession, sendSingleEmail, queuePendingRecipient, getBroadcastHistory, getBroadcastDetail } from './actions/broadcast';
+import { analyzeCertificateAction, sendBroadcastAction, generateEmailPreviewAction, sendTestEmailAction, createBroadcastSession, sendSingleEmail, queuePendingRecipient, getBroadcastHistory, getBroadcastDetail, retryFailedBroadcast } from './actions/broadcast';
 import { signOut, useSession } from 'next-auth/react';
 
 type Recipient = { name: string; email: string };
@@ -1349,6 +1349,7 @@ function BroadcastHistorySection() {
     const [detailLoading, setDetailLoading] = useState(false);
     const [filter, setFilter] = useState<'all' | 'sent' | 'failed' | 'pending'>('all');
     const [refreshing, setRefreshing] = useState(false);
+    const [retrying, setRetrying] = useState(false);
 
     const fetchHistory = useCallback(async () => {
         try {
@@ -1407,6 +1408,24 @@ function BroadcastHistorySection() {
             } finally {
                 setDetailLoading(false);
             }
+        }
+    };
+
+    const handleRetryFailed = async (broadcastId: string) => {
+        if (!confirm('Kirim ulang semua email yang gagal?')) return;
+        setRetrying(true);
+        try {
+            const result = await retryFailedBroadcast(broadcastId);
+            alert(`${result.message}\nCron job akan otomatis mengirim email ini.`);
+            await fetchHistory();
+            if (expandedId) {
+                const data = await getBroadcastDetail(expandedId);
+                setDetail(data);
+            }
+        } catch (e) {
+            alert(`Gagal: ${e instanceof Error ? e.message : 'Unknown error'}`);
+        } finally {
+            setRetrying(false);
         }
     };
 
@@ -1535,20 +1554,30 @@ function BroadcastHistorySection() {
                                         className="overflow-hidden"
                                     >
                                         <div className="border-t border-white/5">
-                                            {/* Filters */}
+                                            {/* Filters + Retry */}
                                             <div className="px-6 py-3 flex items-center gap-2 border-b border-white/5 bg-white/[0.02]">
                                                 {(['all', 'sent', 'failed', 'pending'] as const).map((f) => (
                                                     <button
                                                         key={f}
                                                         onClick={() => setFilter(f)}
                                                         className={`px-3 py-1 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-all ${filter === f
-                                                                ? 'bg-[#2997ff]/20 text-[#2997ff]'
-                                                                : 'text-[#86868b] hover:text-white hover:bg-white/5'
+                                                            ? 'bg-[#2997ff]/20 text-[#2997ff]'
+                                                            : 'text-[#86868b] hover:text-white hover:bg-white/5'
                                                             }`}
                                                     >
                                                         {f === 'all' ? 'Semua' : f === 'sent' ? 'Terkirim' : f === 'failed' ? 'Gagal' : 'Pending'}
                                                     </button>
                                                 ))}
+                                                {b.stats.failed > 0 && (
+                                                    <button
+                                                        onClick={(e) => { e.stopPropagation(); handleRetryFailed(b.id); }}
+                                                        disabled={retrying}
+                                                        className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#ff9f0a]/15 text-[#ff9f0a] text-[10px] font-bold uppercase tracking-widest hover:bg-[#ff9f0a]/25 transition-all disabled:opacity-50"
+                                                    >
+                                                        <RefreshCw className={`w-3 h-3 ${retrying ? 'animate-spin' : ''}`} />
+                                                        {retrying ? 'Memproses...' : 'Kirim Ulang Gagal'}
+                                                    </button>
+                                                )}
                                             </div>
 
                                             {detailLoading ? (
@@ -1573,10 +1602,10 @@ function BroadcastHistorySection() {
                                                                     <td className="px-4 py-2.5 font-mono text-[#a1a1a6] truncate max-w-[200px]">{item.email}</td>
                                                                     <td className="px-4 py-2.5">
                                                                         <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-widest ${item.status === 'sent' || item.status === 'success'
-                                                                                ? 'bg-[#30d158]/15 text-[#30d158]'
-                                                                                : item.status === 'failed'
-                                                                                    ? 'bg-[#ff453a]/15 text-[#ff453a]'
-                                                                                    : 'bg-[#ff9f0a]/15 text-[#ff9f0a]'
+                                                                            ? 'bg-[#30d158]/15 text-[#30d158]'
+                                                                            : item.status === 'failed'
+                                                                                ? 'bg-[#ff453a]/15 text-[#ff453a]'
+                                                                                : 'bg-[#ff9f0a]/15 text-[#ff9f0a]'
                                                                             }`}>
                                                                             {item.status === 'sent' || item.status === 'success' ? '✓' : item.status === 'failed' ? '✗' : '⏳'}
                                                                             {item.status === 'success' ? 'sent' : item.status}

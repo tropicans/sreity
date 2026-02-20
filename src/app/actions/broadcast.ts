@@ -996,3 +996,127 @@ export async function getBroadcastDetail(broadcastId: string) {
         })),
     };
 }
+
+// ── Retry Failed Recipients ────────────────────────────────────────────
+
+export async function retryFailedBroadcast(broadcastId: string) {
+    await ensureAuthenticatedUser();
+
+    // 1. Fetch broadcast data (cert, caption, event info)
+    const broadcast = await prisma.broadcast.findUnique({
+        where: { id: broadcastId },
+        select: {
+            id: true,
+            eventName: true,
+            eventDate: true,
+            caption: true,
+            certificate: true,
+        },
+    });
+
+    if (!broadcast) throw new Error('Broadcast not found');
+
+    // 2. Get default sender profile
+    let senderProfile = await prisma.senderProfile.findFirst({
+        where: { isDefault: true },
+    });
+
+    if (!senderProfile) {
+        // Fallback: get any sender profile
+        senderProfile = await prisma.senderProfile.findFirst({
+            orderBy: { updatedAt: 'desc' },
+        });
+        if (!senderProfile) throw new Error('No sender profile found. Please create one first.');
+    }
+
+    const sender = {
+        name: senderProfile.name,
+        department: senderProfile.department,
+        contact: senderProfile.contact,
+    };
+
+    // 3. Get failed recipients (from Recipient table)
+    const failedRecipients = await prisma.recipient.findMany({
+        where: {
+            broadcastId,
+            status: 'failed',
+        },
+    });
+
+    if (failedRecipients.length === 0) {
+        return { queued: 0, message: 'No failed recipients to retry' };
+    }
+
+    // 4. Also reset any failed PendingEmail records for this broadcast
+    await prisma.pendingEmail.updateMany({
+        where: {
+            broadcastId,
+            status: 'failed',
+        },
+        data: {
+            status: 'pending',
+            attempts: 0,
+            lastError: null,
+            scheduledFor: new Date(),
+        },
+    });
+
+    // 5. Get existing PendingEmail emails to avoid duplicates
+    const existingPendingEmails = await prisma.pendingEmail.findMany({
+        where: { broadcastId },
+        select: { email: true },
+    });
+    const existingPendingSet = new Set(existingPendingEmails.map(p => p.email));
+
+    // 6. Create PendingEmail for failed recipients that don't have one
+    let queued = 0;
+    const certBuffer = Buffer.from(broadcast.certificate);
+
+    for (const recipient of failedRecipients) {
+        if (existingPendingSet.has(recipient.email)) {
+            // Already has a PendingEmail record (reset above)
+            continue;
+        }
+
+        const { subject, html } = buildEmailTemplate({
+            recipientName: recipient.name,
+            caption: broadcast.caption,
+            eventName: broadcast.eventName,
+            eventDate: broadcast.eventDate,
+            sender,
+        });
+
+        await prisma.pendingEmail.create({
+            data: {
+                name: recipient.name,
+                email: recipient.email,
+                subject,
+                html,
+                certificateFilename: `Sertifikat_${recipient.name.replace(/\s+/g, '_')}.pdf`,
+                certificate: certBuffer,
+                status: 'pending',
+                attempts: 0,
+                scheduledFor: new Date(),
+                broadcastId,
+            },
+        });
+
+        queued++;
+    }
+
+    // 7. Reset all failed recipients back to pending
+    await prisma.recipient.updateMany({
+        where: {
+            broadcastId,
+            status: 'failed',
+        },
+        data: {
+            status: 'pending',
+        },
+    });
+
+    return {
+        queued: queued + (failedRecipients.length - queued), // total retried
+        message: `${failedRecipients.length} failed recipients queued for retry`,
+    };
+}
