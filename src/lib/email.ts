@@ -21,13 +21,16 @@ const EMAIL_DELAY_MS = (() => {
 // Gmail transporter
 const gmailTransporter = nodemailer.createTransport({
     service: 'gmail',
+    pool: true,
+    maxConnections: 5,
+    maxMessages: 100,
     auth: {
         user: process.env.GMAIL_USER,
         pass: process.env.GMAIL_APP_PASSWORD,
     },
 });
 
-// Resend transporter (SMTP)
+// Resend transporter
 const resendTransporter = nodemailer.createTransport({
     host: 'smtp.resend.com',
     port: 465,
