@@ -1423,21 +1423,22 @@ function BroadcastHistorySection() {
 
     const getFilteredItems = () => {
         if (!detail) return [];
-        const immediate = detail.recipients.map(r => ({
-            id: r.name + '_' + r.email + '_imm', // naive unique id
-            originalEmail: r.email,
-            name: r.name, email: r.email, status: r.status === 'success' ? 'sent' : r.status,
-            time: r.sentAt, error: null, attempts: 0,
-            dbStatus: r.status // to know whether to call pending or failed
-        }));
-        const pending = detail.pendingEmails.map(p => ({
-            id: p.name + '_' + p.email + '_pend', // naive unique id
-            originalEmail: p.email,
-            name: p.name, email: p.email, status: p.status,
-            time: p.sentAt || p.scheduledFor, error: p.lastError, attempts: p.attempts,
-            dbStatus: p.status // typically 'pending' but might be 'failed' in PendingEmail model, adjust later if needed
-        }));
-        const all = [...immediate, ...pending];
+        // Map over unified recipients (which now includes pending states)
+        const all = detail.recipients.map(r => {
+            const pendingDetails = detail.pendingEmails.find(p => p.email === r.email);
+            return {
+                id: r.name + '_' + r.email,
+                originalEmail: r.email,
+                name: r.name,
+                email: r.email,
+                status: r.status === 'success' ? 'sent' : r.status,
+                time: r.sentAt || pendingDetails?.scheduledFor || null,
+                error: pendingDetails?.lastError || null,
+                attempts: pendingDetails?.attempts || 0,
+                dbStatus: r.status
+            };
+        });
+
         if (filter === 'all') return all;
         if (filter === 'sent') return all.filter(i => i.status === 'sent' || i.status === 'success');
         if (filter === 'failed') return all.filter(i => i.status === 'failed');

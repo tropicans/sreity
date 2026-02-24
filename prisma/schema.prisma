@@ -29,17 +29,15 @@ model Recipient {
   sentAt      DateTime  @default(now())
   broadcastId String
   broadcast   Broadcast @relation(fields: [broadcastId], references: [id])
+  pendingEmail PendingEmail?
 }
 
 model PendingEmail {
   id                  String    @id @default(cuid())
-  name                String
-  email               String
   subject             String
   html                String
   certificateFilename String
   certificate         Bytes
-  status              String    @default("pending") // pending, sent, failed
   attempts            Int       @default(0)
   lastError           String?
   scheduledFor        DateTime
@@ -48,8 +46,10 @@ model PendingEmail {
   updatedAt           DateTime  @updatedAt
   broadcastId         String
   broadcast           Broadcast @relation(fields: [broadcastId], references: [id])
+  recipientId         String    @unique
+  recipient           Recipient @relation(fields: [recipientId], references: [id], onDelete: Cascade)
 
-  @@index([status, scheduledFor])
+  @@index([scheduledFor])
   @@index([broadcastId])
 }
 

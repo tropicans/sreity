@@ -472,7 +472,7 @@ export async function sendBroadcastAction({
     if (pendingRecipients.length > 0) {
         const scheduledFor = new Date(Date.now() + getPendingDelayHours() * 60 * 60 * 1000);
 
-        const pendingEmailRows = pendingRecipients.map((recipient) => {
+        const createOperations = pendingRecipients.map((recipient) => {
             const { subject, html } = buildEmailTemplate({
                 recipientName: recipient.name,
                 caption,
@@ -482,31 +482,27 @@ export async function sendBroadcastAction({
                 youtubeUrl,
             });
 
-            return {
-                name: recipient.name,
-                email: recipient.email,
-                subject,
-                html,
-                certificateFilename: `Sertifikat_${recipient.name.replace(/\s+/g, '_')}.pdf`,
-                certificate: Buffer.from(recipient.certBuffer && recipient.certBuffer.length > 0 ? recipient.certBuffer : firstAvailableCertificate),
-                status: 'pending',
-                scheduledFor,
-                broadcastId: broadcast.id,
-            };
+            return prisma.recipient.create({
+                data: {
+                    name: recipient.name,
+                    email: recipient.email,
+                    status: 'pending',
+                    broadcastId: broadcast.id,
+                    pendingEmail: {
+                        create: {
+                            subject,
+                            html,
+                            certificateFilename: `Sertifikat_${recipient.name.replace(/\s+/g, '_')}.pdf`,
+                            certificate: Buffer.from(recipient.certBuffer && recipient.certBuffer.length > 0 ? recipient.certBuffer : firstAvailableCertificate),
+                            scheduledFor,
+                            broadcastId: broadcast.id,
+                        }
+                    }
+                }
+            });
         });
 
-        await prisma.pendingEmail.createMany({
-            data: pendingEmailRows,
-        });
-
-        await prisma.recipient.createMany({
-            data: pendingRecipients.map((recipient) => ({
-                name: recipient.name,
-                email: recipient.email,
-                status: 'pending',
-                broadcastId: broadcast.id,
-            })),
-        });
+        await prisma.$transaction(createOperations);
 
         for (const recipient of pendingRecipients) {
             results.push({ email: recipient.email, status: 'pending' });
@@ -788,26 +784,22 @@ export async function queuePendingRecipient({
 
     const cert = certBuffer && certBuffer.length > 0 ? certBuffer : defaultCertBuffer;
 
-    await prisma.pendingEmail.create({
-        data: {
-            name: recipient.name,
-            email: recipient.email,
-            subject,
-            html,
-            certificateFilename: `Sertifikat_${recipient.name.replace(/\s+/g, '_')}.pdf`,
-            certificate: Buffer.from(cert),
-            status: 'pending',
-            scheduledFor,
-            broadcastId,
-        },
-    });
-
     await prisma.recipient.create({
         data: {
             name: recipient.name,
             email: recipient.email,
             status: 'pending',
             broadcastId,
+            pendingEmail: {
+                create: {
+                    subject,
+                    html,
+                    certificateFilename: `Sertifikat_${recipient.name.replace(/\s+/g, '_')}.pdf`,
+                    certificate: Buffer.from(cert),
+                    scheduledFor,
+                    broadcastId,
+                }
+            }
         },
     });
 
@@ -960,13 +952,18 @@ export async function getBroadcastDetail(broadcastId: string) {
     const pendingEmails = await prisma.pendingEmail.findMany({
         where: { broadcastId },
         select: {
-            name: true,
-            email: true,
-            status: true,
+            id: true,
             attempts: true,
             lastError: true,
             scheduledFor: true,
             sentAt: true,
+            recipient: {
+                select: {
+                    name: true,
+                    email: true,
+                    status: true,
+                }
+            }
         },
         orderBy: { createdAt: 'asc' },
     });
@@ -982,6 +979,9 @@ export async function getBroadcastDetail(broadcastId: string) {
         })),
         pendingEmails: pendingEmails.map(p => ({
             ...p,
+            name: p.recipient?.name || 'Unknown',
+            email: p.recipient?.email || 'unknown',
+            status: p.recipient?.status || 'pending',
             scheduledFor: p.scheduledFor.toISOString(),
             sentAt: p.sentAt?.toISOString() || null,
         })),
@@ -1032,83 +1032,73 @@ export async function retryFailedBroadcast(broadcastId: string) {
             broadcastId,
             status: 'failed',
         },
+        include: {
+            pendingEmail: true
+        }
     });
 
     if (failedRecipients.length === 0) {
         return { queued: 0, message: 'No failed recipients to retry' };
     }
 
-    // 4. Also reset any failed PendingEmail records for this broadcast
-    // 4. Also reset any failed PendingEmail records for this broadcast
-    await prisma.pendingEmail.updateMany({
-        where: {
-            broadcastId,
-            status: 'failed',
-        },
-        data: {
-            status: 'pending',
-            attempts: 0,
-            lastError: null,
-            scheduledFor: new Date(),
-        },
-    });
-
-    // 5. Get existing PendingEmail emails to avoid duplicates
-    const existingPendingEmails = await prisma.pendingEmail.findMany({
-        where: { broadcastId },
-        select: { email: true },
-    });
-    const existingPendingSet = new Set(existingPendingEmails.map(p => p.email));
-
-    // 6. Create PendingEmail for failed recipients that don't have one
-    let queued = 0;
     const certBuffer = Buffer.from(broadcast.certificate);
 
-    for (const recipient of failedRecipients) {
-        if (existingPendingSet.has(recipient.email)) {
-            // Already has a PendingEmail record (reset above)
-            continue;
+    // We will do all updates in a single transaction for safety
+    const operations = failedRecipients.map(recipient => {
+        const updateRecipientParams = {
+            where: { id: recipient.id },
+            data: { status: 'pending' }
+        };
+
+        if (recipient.pendingEmail) {
+            // Already has pending email, just reset its attempts and scheduledFor
+            return prisma.recipient.update({
+                ...updateRecipientParams,
+                data: {
+                    ...updateRecipientParams.data,
+                    pendingEmail: {
+                        update: {
+                            attempts: 0,
+                            lastError: null,
+                            scheduledFor: new Date()
+                        }
+                    }
+                }
+            });
+        } else {
+            // No pending email attached (failed during immediate send). Create one.
+            const { subject, html } = buildEmailTemplate({
+                recipientName: recipient.name,
+                caption: broadcast.caption,
+                eventName: broadcast.eventName,
+                eventDate: broadcast.eventDate,
+                sender,
+            });
+
+            return prisma.recipient.update({
+                ...updateRecipientParams,
+                data: {
+                    ...updateRecipientParams.data,
+                    pendingEmail: {
+                        create: {
+                            subject,
+                            html,
+                            certificateFilename: `Sertifikat_${recipient.name.replace(/\s+/g, '_')}.pdf`,
+                            certificate: certBuffer,
+                            attempts: 0,
+                            scheduledFor: new Date(),
+                            broadcastId,
+                        }
+                    }
+                }
+            });
         }
-
-        const { subject, html } = buildEmailTemplate({
-            recipientName: recipient.name,
-            caption: broadcast.caption,
-            eventName: broadcast.eventName,
-            eventDate: broadcast.eventDate,
-            sender,
-        });
-
-        await prisma.pendingEmail.create({
-            data: {
-                name: recipient.name,
-                email: recipient.email,
-                subject,
-                html,
-                certificateFilename: `Sertifikat_${recipient.name.replace(/\s+/g, '_')}.pdf`,
-                certificate: certBuffer,
-                status: 'pending',
-                attempts: 0,
-                scheduledFor: new Date(),
-                broadcastId,
-            },
-        });
-
-        queued++;
-    }
-
-    // 7. Reset all failed recipients back to pending
-    await prisma.recipient.updateMany({
-        where: {
-            broadcastId,
-            status: 'failed',
-        },
-        data: {
-            status: 'pending',
-        },
     });
 
+    await prisma.$transaction(operations);
+
     return {
-        queued: queued + (failedRecipients.length - queued), // total retried
+        queued: failedRecipients.length,
         message: `${failedRecipients.length} failed recipients queued for retry`,
     };
 }
@@ -1125,34 +1115,18 @@ export async function updateRecipientEmailAction(broadcastId: string, currentEma
         }
 
         if (status === 'pending' || status === 'failed') {
-            // Check PendingEmail (ignoring status to avoid race conditions with cron)
-            const pending = await prisma.pendingEmail.findFirst({
-                where: { broadcastId, email: currentEmail },
-            });
-
-            // Check Recipient table
             const recipient = await prisma.recipient.findFirst({
                 where: { broadcastId, email: currentEmail }
             });
 
-            if (!pending && !recipient) {
+            if (!recipient) {
                 return { error: 'Penerima tidak ditemukan di riwayat. Mungkin data sudah dihapus atau tidak pernah ada. Silakan refresh halaman.' };
             }
 
-            // Update whatever exists
-            if (pending) {
-                await prisma.pendingEmail.update({
-                    where: { id: pending.id },
-                    data: { email: validNewEmail },
-                });
-            }
-
-            if (recipient) {
-                await prisma.recipient.update({
-                    where: { id: recipient.id },
-                    data: { email: validNewEmail }
-                });
-            }
+            await prisma.recipient.update({
+                where: { id: recipient.id },
+                data: { email: validNewEmail }
+            });
         } else {
             return { error: 'Hanya email gagal atau pending yang dapat diubah.' };
         }

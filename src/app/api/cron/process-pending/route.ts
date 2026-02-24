@@ -51,8 +51,13 @@ export async function GET(request: Request) {
 
     const pendingEmails = await prisma.pendingEmail.findMany({
         where: {
-            status: 'pending',
             scheduledFor: { lte: now },
+            recipient: {
+                status: 'pending'
+            }
+        },
+        include: {
+            recipient: true
         },
         orderBy: { createdAt: 'asc' },
         take: safeDailyLimit,
@@ -64,7 +69,7 @@ export async function GET(request: Request) {
     for (const pending of pendingEmails) {
         try {
             await sendCertificateEmail({
-                to: pending.email,
+                to: pending.recipient.email,
                 subject: pending.subject,
                 html: pending.html,
                 attachments: [
@@ -78,18 +83,15 @@ export async function GET(request: Request) {
             await prisma.pendingEmail.update({
                 where: { id: pending.id },
                 data: {
-                    status: 'sent',
                     sentAt: new Date(),
                     attempts: { increment: 1 },
                     lastError: null,
                 },
             });
 
-            await prisma.recipient.updateMany({
+            await prisma.recipient.update({
                 where: {
-                    broadcastId: pending.broadcastId,
-                    email: pending.email,
-                    status: 'pending',
+                    id: pending.recipientId,
                 },
                 data: {
                     status: 'success',
@@ -108,7 +110,6 @@ export async function GET(request: Request) {
                 data: {
                     attempts: nextAttempt,
                     lastError: error instanceof Error ? error.message : 'Unknown error',
-                    status: shouldMarkFailed ? 'failed' : 'pending',
                     scheduledFor: shouldMarkFailed
                         ? pending.scheduledFor
                         : new Date(Date.now() + retryDelayMinutes * 60 * 1000),
@@ -116,11 +117,9 @@ export async function GET(request: Request) {
             });
 
             if (shouldMarkFailed) {
-                await prisma.recipient.updateMany({
+                await prisma.recipient.update({
                     where: {
-                        broadcastId: pending.broadcastId,
-                        email: pending.email,
-                        status: 'pending',
+                        id: pending.recipientId,
                     },
                     data: {
                         status: 'failed',
