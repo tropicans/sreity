@@ -1461,10 +1461,14 @@ function BroadcastHistorySection() {
                 item.dbStatus
             );
 
-            // On success, reset UI and re-fetch to see the updated email and wait for re-send logic if applicable
-            setEditingEmailId(null);
-            await fetchDetail(expandedId);
-            alert(`Sukses: ${result.message}`);
+            if (result.error) {
+                alert(`Gagal: ${result.error}`);
+            } else {
+                // On success, reset UI and re-fetch
+                setEditingEmailId(null);
+                await fetchDetail(expandedId);
+                alert(`Sukses: ${result.message}`);
+            }
         } catch (e) {
             alert(`Gagal menyimpan email: ${e instanceof Error ? e.message : 'Unknown error'}`);
         } finally {
