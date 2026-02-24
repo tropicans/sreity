@@ -1039,6 +1039,7 @@ export async function retryFailedBroadcast(broadcastId: string) {
     }
 
     // 4. Also reset any failed PendingEmail records for this broadcast
+    // 4. Also reset any failed PendingEmail records for this broadcast
     await prisma.pendingEmail.updateMany({
         where: {
             broadcastId,
@@ -1110,4 +1111,62 @@ export async function retryFailedBroadcast(broadcastId: string) {
         queued: queued + (failedRecipients.length - queued), // total retried
         message: `${failedRecipients.length} failed recipients queued for retry`,
     };
+}
+
+export async function updateRecipientEmailAction(broadcastId: string, currentEmail: string, newEmail: string, status: string) {
+    await ensureAuthenticatedUser();
+
+    // Validasi email baru
+    const { cleanAndValidateEmail } = await import('@/lib/validations');
+    const validNewEmail = cleanAndValidateEmail(newEmail);
+    if (!validNewEmail) {
+        throw new Error('Alamat email baru tidak valid.');
+    }
+
+    if (status === 'pending') {
+        // Cari email di PendingEmail
+        const pending = await prisma.pendingEmail.findFirst({
+            where: { broadcastId, email: currentEmail, status: 'pending' },
+        });
+
+        if (!pending) {
+            throw new Error('Penerima tidak ditemukan di antrean (mungkin sudah terkirim / gagal). Silakan refresh halaman.');
+        }
+
+        // Update email target dan re-generasi subject/html (kalau email ada di dalam copy-nya, dll)
+        // Sebenarnya update email saja cukup jika template tidak mencantumkan alamat email
+        await prisma.pendingEmail.update({
+            where: { id: pending.id },
+            data: { email: validNewEmail },
+        });
+
+        // Update recipient table representation for pending as well
+        const pendingRecipient = await prisma.recipient.findFirst({
+            where: { broadcastId, email: currentEmail, status: 'pending' }
+        });
+        if (pendingRecipient) {
+            await prisma.recipient.update({
+                where: { id: pendingRecipient.id },
+                data: { email: validNewEmail }
+            });
+        }
+    } else if (status === 'failed') {
+        // Update jika ada di Recipient table as failed
+        const recipient = await prisma.recipient.findFirst({
+            where: { broadcastId, email: currentEmail, status: 'failed' },
+        });
+
+        if (!recipient) {
+            throw new Error('Penerima dengan status gagal tidak ditemukan. Silakan refresh halaman.');
+        }
+
+        await prisma.recipient.update({
+            where: { id: recipient.id },
+            data: { email: validNewEmail },
+        });
+    } else {
+        throw new Error('Hanya email gagal atau pending yang dapat diubah.');
+    }
+
+    return { message: 'Alamat email berhasil diperbarui', newEmail: validNewEmail };
 }

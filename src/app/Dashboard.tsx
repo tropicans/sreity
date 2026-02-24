@@ -1,12 +1,13 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Upload, Users, CheckCircle2, Loader2, Send, X, ChevronRight, ChevronDown, Download, FileText, Search, AlertCircle, LogOut, Eye, Mail, History, Clock, RefreshCw } from 'lucide-react';
+import { Upload, Users, CheckCircle2, Loader2, Send, X, ChevronRight, ChevronDown, Download, FileText, Search, AlertCircle, LogOut, Eye, Mail, History, Clock, RefreshCw, Edit2, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useDropzone } from 'react-dropzone';
 import Papa from 'papaparse';
 import Image from 'next/image';
-import { analyzeCertificateAction, sendBroadcastAction, generateEmailPreviewAction, sendTestEmailAction, createBroadcastSession, sendSingleEmail, queuePendingRecipient, getBroadcastHistory, getBroadcastDetail, retryFailedBroadcast } from './actions/broadcast';
+import { analyzeCertificateAction, sendBroadcastAction, generateEmailPreviewAction, sendTestEmailAction, createBroadcastSession, sendSingleEmail, queuePendingRecipient, getBroadcastHistory, getBroadcastDetail, retryFailedBroadcast, updateRecipientEmailAction } from './actions/broadcast';
+import { cleanAndValidateEmail } from '@/lib/validations';
 import { signOut, useSession } from 'next-auth/react';
 
 type Recipient = { name: string; email: string };
@@ -424,35 +425,9 @@ export default function Dashboard() {
     const handleSend = async () => {
         if (!file || !aiResult || recipients.length === 0) return;
 
-        // Auto-correct common email typos
-        const autoCorrectEmail = (email: string): string => {
-            let fixed = email.trim().toLowerCase();
-            // Remove spaces
-            fixed = fixed.replace(/\s+/g, '');
-            // Fix common domain typos
-            fixed = fixed.replace(/@gmail\.con$/, '@gmail.com');
-            fixed = fixed.replace(/@gmail\.cim$/, '@gmail.com');
-            fixed = fixed.replace(/@gmail\.cok$/, '@gmail.com');
-            fixed = fixed.replace(/@gmail\.co$/, '@gmail.com');
-            fixed = fixed.replace(/@gmai\.com$/, '@gmail.com');
-            fixed = fixed.replace(/@gmal\.com$/, '@gmail.com');
-            fixed = fixed.replace(/@gmial\.com$/, '@gmail.com');
-            fixed = fixed.replace(/@gamil\.com$/, '@gmail.com');
-            fixed = fixed.replace(/@yaho\.com$/, '@yahoo.com');
-            fixed = fixed.replace(/@yahooo\.com$/, '@yahoo.com');
-            fixed = fixed.replace(/@hmail\.com$/, '@gmail.com');
-            // Fix missing .com for common domains
-            if (fixed.match(/@gmail$/) || fixed.match(/@yahoo$/) || fixed.match(/@outlook$/)) {
-                fixed += '.com';
-            }
-            // Fix .co.id typos for gmail
-            fixed = fixed.replace(/@gmail\.co\.id$/, '@gmail.com');
-            return fixed;
-        };
-
         const correctedRecipients = recipients.map(r => ({
             ...r,
-            email: autoCorrectEmail(r.email),
+            email: cleanAndValidateEmail(r.email) || r.email, // fallback to original if null to let validation catch it or report it
         }));
 
         // Log corrections
@@ -1348,8 +1323,25 @@ function BroadcastHistorySection() {
     const [detail, setDetail] = useState<BroadcastDetailData | null>(null);
     const [detailLoading, setDetailLoading] = useState(false);
     const [filter, setFilter] = useState<'all' | 'sent' | 'failed' | 'pending'>('all');
+
+    // UI state for editing emails
+    const [editingEmailId, setEditingEmailId] = useState<string | null>(null);
+    const [editedEmailValue, setEditedEmailValue] = useState('');
+    const [savingEmail, setSavingEmail] = useState<{ id: string } | null>(null);
     const [refreshing, setRefreshing] = useState(false);
     const [retrying, setRetrying] = useState(false);
+
+    const fetchDetail = useCallback(async (id: string) => {
+        setDetailLoading(true);
+        try {
+            const data = await getBroadcastDetail(id);
+            setDetail(data);
+        } catch (e) {
+            console.error('Failed to load detail:', e);
+        } finally {
+            setDetailLoading(false);
+        }
+    }, []);
 
     const fetchHistory = useCallback(async () => {
         try {
@@ -1432,18 +1424,52 @@ function BroadcastHistorySection() {
     const getFilteredItems = () => {
         if (!detail) return [];
         const immediate = detail.recipients.map(r => ({
+            id: r.name + '_' + r.email + '_imm', // naive unique id
+            originalEmail: r.email,
             name: r.name, email: r.email, status: r.status === 'success' ? 'sent' : r.status,
             time: r.sentAt, error: null, attempts: 0,
+            dbStatus: r.status // to know whether to call pending or failed
         }));
         const pending = detail.pendingEmails.map(p => ({
+            id: p.name + '_' + p.email + '_pend', // naive unique id
+            originalEmail: p.email,
             name: p.name, email: p.email, status: p.status,
             time: p.sentAt || p.scheduledFor, error: p.lastError, attempts: p.attempts,
+            dbStatus: p.status // typically 'pending' but might be 'failed' in PendingEmail model, adjust later if needed
         }));
         const all = [...immediate, ...pending];
         if (filter === 'all') return all;
         if (filter === 'sent') return all.filter(i => i.status === 'sent' || i.status === 'success');
         if (filter === 'failed') return all.filter(i => i.status === 'failed');
         return all.filter(i => i.status === 'pending');
+    };
+
+    const handleEditEmailClick = (item: ReturnType<typeof getFilteredItems>[0]) => {
+        setEditingEmailId(item.id);
+        setEditedEmailValue(item.originalEmail);
+    };
+
+    const handleSaveEmail = async (item: ReturnType<typeof getFilteredItems>[0]) => {
+        if (!expandedId) return;
+
+        try {
+            setSavingEmail({ id: item.id });
+            const result = await updateRecipientEmailAction(
+                expandedId,
+                item.originalEmail,
+                editedEmailValue,
+                item.dbStatus
+            );
+
+            // On success, reset UI and re-fetch to see the updated email and wait for re-send logic if applicable
+            setEditingEmailId(null);
+            await fetchDetail(expandedId);
+            alert(`Sukses: ${result.message}`);
+        } catch (e) {
+            alert(`Gagal menyimpan email: ${e instanceof Error ? e.message : 'Unknown error'}`);
+        } finally {
+            setSavingEmail(null);
+        }
     };
 
     const formatDate = (iso: string) => {
@@ -1593,13 +1619,29 @@ function BroadcastHistorySection() {
                                                                 <th className="px-4 py-2 text-[9px] font-bold uppercase tracking-widest text-[#86868b]">Email</th>
                                                                 <th className="px-4 py-2 text-[9px] font-bold uppercase tracking-widest text-[#86868b]">Status</th>
                                                                 <th className="px-4 py-2 text-[9px] font-bold uppercase tracking-widest text-[#86868b] text-right">Waktu</th>
+                                                                <th className="px-4 py-2 text-[9px] font-bold uppercase tracking-widest text-[#86868b] text-right">Aksi</th>
                                                             </tr>
                                                         </thead>
                                                         <tbody className="divide-y divide-white/5">
                                                             {getFilteredItems().map((item, i) => (
-                                                                <tr key={i} className="hover:bg-white/[0.02] transition-colors">
+                                                                <tr key={item.id} className="hover:bg-white/[0.02] transition-colors">
                                                                     <td className="px-6 py-2.5 truncate max-w-[150px]">{item.name}</td>
-                                                                    <td className="px-4 py-2.5 font-mono text-[#a1a1a6] truncate max-w-[200px]">{item.email}</td>
+                                                                    <td className="px-4 py-2.5 font-mono text-[#a1a1a6] truncate max-w-[200px]">
+                                                                        {editingEmailId === item.id ? (
+                                                                            <div className="flex items-center gap-1.5 min-w-[150px]">
+                                                                                <input
+                                                                                    type="email"
+                                                                                    value={editedEmailValue}
+                                                                                    onChange={(e) => setEditedEmailValue(e.target.value)}
+                                                                                    className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-0.5 text-xs text-white focus:outline-none focus:border-[#5e5ce6] focus:ring-1 focus:ring-[#5e5ce6]"
+                                                                                    disabled={savingEmail?.id === item.id}
+                                                                                    autoFocus
+                                                                                />
+                                                                            </div>
+                                                                        ) : (
+                                                                            item.email
+                                                                        )}
+                                                                    </td>
                                                                     <td className="px-4 py-2.5">
                                                                         <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-widest ${item.status === 'sent' || item.status === 'success'
                                                                             ? 'bg-[#30d158]/15 text-[#30d158]'
@@ -1616,6 +1658,38 @@ function BroadcastHistorySection() {
                                                                     </td>
                                                                     <td className="px-4 py-2.5 text-[#86868b] text-right whitespace-nowrap">
                                                                         {item.time ? formatDate(item.time) : '-'}
+                                                                    </td>
+                                                                    <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                                                                        {editingEmailId === item.id ? (
+                                                                            <div className="flex items-center justify-end gap-1">
+                                                                                <button
+                                                                                    onClick={() => handleSaveEmail(item)}
+                                                                                    disabled={savingEmail?.id === item.id}
+                                                                                    className="p-1 rounded bg-[#30d158]/20 text-[#30d158] hover:bg-[#30d158]/30 transition-colors disabled:opacity-50"
+                                                                                    title="Save"
+                                                                                >
+                                                                                    {savingEmail?.id === item.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                                                                                </button>
+                                                                                <button
+                                                                                    onClick={() => setEditingEmailId(null)}
+                                                                                    disabled={savingEmail?.id === item.id}
+                                                                                    className="p-1 rounded border border-white/10 hover:bg-white/10 text-[#86868b] hover:text-white transition-colors disabled:opacity-50"
+                                                                                    title="Cancel"
+                                                                                >
+                                                                                    <X className="w-3 h-3" />
+                                                                                </button>
+                                                                            </div>
+                                                                        ) : (
+                                                                            (item.status === 'failed' || item.status === 'pending') && (
+                                                                                <button
+                                                                                    onClick={() => handleEditEmailClick(item)}
+                                                                                    className="p-1 rounded border border-white/10 hover:bg-white/10 text-[#86868b] hover:text-white transition-colors"
+                                                                                    title="Perbaiki Email"
+                                                                                >
+                                                                                    <Edit2 className="w-3 h-3" />
+                                                                                </button>
+                                                                            )
+                                                                        )}
                                                                     </td>
                                                                 </tr>
                                                             ))}

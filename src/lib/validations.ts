@@ -62,6 +62,50 @@ export const drivefolderIdSchema = z.string()
     .max(100, 'Folder ID terlalu panjang')
     .regex(/^[a-zA-Z0-9_-]+$/, 'Format Folder ID tidak valid');
 
+// Email cleaning and validation utility
+export function cleanAndValidateEmail(email: string): string | null {
+    if (!email) return null;
+
+    // 1. Lowercase and remove all whitespace
+    let cleanedEmail = email.toLowerCase().replace(/\s+/g, '');
+
+    // 2. Remove trailing period if present (e.g., name@domain.com.)
+    cleanedEmail = cleanedEmail.replace(/\.$/, '');
+
+    // 3. Fix common typos in gmail domain
+    cleanedEmail = cleanedEmail
+        .replace(/@gmail$/i, '@gmail.com')          // Missing .com
+        .replace(/@gmail\.co$/i, '@gmail.com')      // .co instead of .com in gmail
+        .replace(/@gmai\.com$/i, '@gmail.com')      // Missing l
+        .replace(/@gmal\.com$/i, '@gmail.com')      // Missing i
+        .replace(/@gmial\.com$/i, '@gmail.com')     // Swapped i and a
+        .replace(/@gamil\.com$/i, '@gmail.com')     // Swapped a and m
+        .replace(/@hmail\.com$/i, '@gmail.com')     // hmail (typo near g)
+        .replace(/@gmail\.con$/i, '@gmail.com')     // .con
+        .replace(/@gmail\.cok$/i, '@gmail.com')     // .cok
+        .replace(/@gmail\.cim$/i, '@gmail.com')     // .cim
+        .replace(/@gmail\.co\.id$/i, '@gmail.com'); // .co.id for gmail
+
+    // Fix other common domains
+    cleanedEmail = cleanedEmail
+        .replace(/@yahooo\.com$/i, '@yahoo.com')
+        .replace(/@yaho\.com$/i, '@yahoo.com');
+
+    // Fix missing .com for other popular domains (if they end exactly with the domain name)
+    if (cleanedEmail.match(/@yahoo$/) || cleanedEmail.match(/@outlook$/) || cleanedEmail.match(/@hotmail$/)) {
+        cleanedEmail += '.com';
+    }
+
+    // 4. Validate with standard Regex
+    const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+
+    if (emailRegex.test(cleanedEmail)) {
+        return cleanedEmail;
+    }
+
+    return null;
+}
+
 // Sanitize HTML to prevent XSS
 export function sanitizeHtml(input: string): string {
     return input
