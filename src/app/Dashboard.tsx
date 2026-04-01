@@ -151,19 +151,31 @@ export default function Dashboard() {
                 const trimmedLine = line.trim();
                 if (!trimmedLine) return null;
 
-                // Use pipe (|) as separator to handle names with commas
-                // Format: "Name|email" or "Name, email" (fallback)
+                // Handle names with commas like "B. Deddy, Sp, Mt, email@example.com"
+                // Strategy: find the comma where the part after it contains @
+                const parts = trimmedLine.split(',');
                 let name: string, email: string;
 
-                if (trimmedLine.includes('|')) {
-                    const parts = trimmedLine.split('|');
-                    name = parts[0].trim();
-                    email = parts.slice(1).join('|').trim();
-                } else if (trimmedLine.includes(',')) {
-                    // Fallback: use first comma as separator
-                    const separatorIndex = trimmedLine.indexOf(',');
-                    name = trimmedLine.slice(0, separatorIndex).trim();
-                    email = trimmedLine.slice(separatorIndex + 1).trim();
+                if (parts.length >= 2) {
+                    // Find the last part that contains @ (email)
+                    let emailIndex = -1;
+                    for (let i = parts.length - 1; i >= 0; i--) {
+                        if (parts[i].trim().includes('@')) {
+                            emailIndex = i;
+                            break;
+                        }
+                    }
+
+                    if (emailIndex > 0) {
+                        // Join all parts before email as name
+                        name = parts.slice(0, emailIndex).join(',').trim();
+                        email = parts[emailIndex].trim();
+                    } else {
+                        // Fallback: use first comma
+                        const separatorIndex = trimmedLine.indexOf(',');
+                        name = trimmedLine.slice(0, separatorIndex).trim();
+                        email = trimmedLine.slice(separatorIndex + 1).trim();
+                    }
                 } else {
                     return null;
                 }
@@ -405,10 +417,9 @@ export default function Dashboard() {
             skipEmptyLines: true,
             complete: (results) => {
                 const data = results.data as Array<Record<string, string | undefined>>;
-                // Use pipe (|) as separator to handle names with commas
                 const formattedRecipients = data
                     .filter(r => (r.name || r.Nama) && (r.email || r.Email))
-                    .map(r => `${r.name || r.Nama}|${r.email || r.Email}`)
+                    .map(r => `${r.name || r.Nama}, ${r.email || r.Email}`)
                     .join('\n');
                 setRecipientsText(formattedRecipients);
             },
