@@ -151,11 +151,23 @@ export default function Dashboard() {
                 const trimmedLine = line.trim();
                 if (!trimmedLine) return null;
 
-                const separatorIndex = trimmedLine.lastIndexOf(',');
-                if (separatorIndex < 0) return null;
+                // Use pipe (|) as separator to handle names with commas
+                // Format: "Name|email" or "Name, email" (fallback)
+                let name: string, email: string;
 
-                const name = trimmedLine.slice(0, separatorIndex).trim();
-                const email = trimmedLine.slice(separatorIndex + 1).trim();
+                if (trimmedLine.includes('|')) {
+                    const parts = trimmedLine.split('|');
+                    name = parts[0].trim();
+                    email = parts.slice(1).join('|').trim();
+                } else if (trimmedLine.includes(',')) {
+                    // Fallback: use first comma as separator
+                    const separatorIndex = trimmedLine.indexOf(',');
+                    name = trimmedLine.slice(0, separatorIndex).trim();
+                    email = trimmedLine.slice(separatorIndex + 1).trim();
+                } else {
+                    return null;
+                }
+
                 return name && email ? { name, email } : null;
             })
             .filter(Boolean) as Recipient[];
@@ -393,9 +405,10 @@ export default function Dashboard() {
             skipEmptyLines: true,
             complete: (results) => {
                 const data = results.data as Array<Record<string, string | undefined>>;
+                // Use pipe (|) as separator to handle names with commas
                 const formattedRecipients = data
                     .filter(r => (r.name || r.Nama) && (r.email || r.Email))
-                    .map(r => `${r.name || r.Nama}, ${r.email || r.Email}`)
+                    .map(r => `${r.name || r.Nama}|${r.email || r.Email}`)
                     .join('\n');
                 setRecipientsText(formattedRecipients);
             },
