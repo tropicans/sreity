@@ -5,6 +5,7 @@ import { auth } from '@/lib/auth';
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit';
 
 const DRIVE_REQUEST_TIMEOUT_MS = parseInt(process.env.DRIVE_REQUEST_TIMEOUT_MS || '45000', 10);
+const DRIVE_FOLDER_ID_PATTERN = /^[a-zA-Z0-9_-]{10,100}$/;
 
 interface DriveFile {
     id: string;
@@ -19,6 +20,45 @@ interface CertificateMatch {
     fileName: string | null;
     resourceKey: string | null;
     certBuffer: number[] | null;
+}
+
+type DriveMatchPreview = {
+    name: string;
+    email: string;
+    matched: boolean;
+    fileName: string | null;
+    fileId: string | null;
+    resourceKey: string | null;
+};
+
+type CheckDriveMatchesResult =
+    | { ok: true; matches: DriveMatchPreview[] }
+    | { ok: false; error: string };
+
+function normalizeDriveFolderId(input: string): string {
+    const trimmed = input.trim();
+    if (!trimmed) {
+        throw new Error('Folder Google Drive wajib diisi.');
+    }
+
+    if (DRIVE_FOLDER_ID_PATTERN.test(trimmed)) {
+        return trimmed;
+    }
+
+    try {
+        const parsed = new URL(trimmed);
+        const pathMatch = parsed.pathname.match(/\/folders\/([a-zA-Z0-9_-]{10,100})/);
+        const queryId = parsed.searchParams.get('id');
+        const folderId = pathMatch?.[1] || queryId || '';
+
+        if (DRIVE_FOLDER_ID_PATTERN.test(folderId)) {
+            return folderId;
+        }
+    } catch {
+        // Fall through to the final validation error below.
+    }
+
+    throw new Error('Masukkan Folder ID Google Drive atau URL folder yang valid.');
 }
 
 /**
@@ -80,9 +120,10 @@ async function enforceDriveRateLimit(identifier: string) {
 /**
  * List files in a Google Drive folder.
  */
-export async function listDriveFiles(folderId: string): Promise<DriveFile[]> {
+export async function listDriveFiles(folderInput: string): Promise<DriveFile[]> {
     await ensureAuthenticated();
     const drive = getDriveClient();
+    const folderId = normalizeDriveFolderId(folderInput);
 
     try {
         const allFiles: DriveFile[] = [];
@@ -94,6 +135,8 @@ export async function listDriveFiles(folderId: string): Promise<DriveFile[]> {
                 fields: 'nextPageToken, files(id, name, resourceKey)',
                 pageSize: 1000,
                 pageToken,
+                includeItemsFromAllDrives: true,
+                supportsAllDrives: true,
             }), DRIVE_REQUEST_TIMEOUT_MS, 'Timeout saat membaca daftar file Google Drive.');
 
             const files = (response.data.files || [])
@@ -111,7 +154,7 @@ export async function listDriveFiles(folderId: string): Promise<DriveFile[]> {
         return allFiles;
     } catch (error) {
         console.error('Error listing Drive files:', error);
-        return [];
+        throw new Error(error instanceof Error ? error.message : 'Gagal membaca folder Google Drive.');
     }
 }
 
@@ -123,7 +166,11 @@ export async function downloadDriveFile(fileId: string, resourceKey?: string | n
     const drive = getDriveClient();
 
     try {
-        const params: drive_v3.Params$Resource$Files$Get = { fileId, alt: 'media' };
+        const params: drive_v3.Params$Resource$Files$Get = {
+            fileId,
+            alt: 'media',
+            supportsAllDrives: true,
+        };
         if (resourceKey) {
             (params as unknown as { resourceKey?: string }).resourceKey = resourceKey;
         }
@@ -186,7 +233,7 @@ export async function fetchCertificatesFromDrive(
 export async function checkDriveMatches(
     folderId: string,
     recipients: { name: string; email: string }[]
-): Promise<{ name: string; email: string; matched: boolean; fileName: string | null; fileId: string | null; resourceKey: string | null }[]> {
+): Promise<DriveMatchPreview[]> {
     const identifier = await ensureAuthenticated();
     await enforceDriveRateLimit(identifier);
 
@@ -194,7 +241,7 @@ export async function checkDriveMatches(
     const exactMap = new Map<string, DriveFile>(
         files.map((file) => [normalizeName(file.name.replace(/\.[^/.]+$/, '')), file]),
     );
-    const results: { name: string; email: string; matched: boolean; fileName: string | null; fileId: string | null; resourceKey: string | null }[] = [];
+    const results: DriveMatchPreview[] = [];
 
     for (const recipient of recipients) {
         const matchedFile = findMatchingFile(recipient.name, files, exactMap);
@@ -210,5 +257,20 @@ export async function checkDriveMatches(
     }
 
     return results;
+}
+
+export async function checkDriveMatchesAction(
+    folderId: string,
+    recipients: { name: string; email: string }[]
+): Promise<CheckDriveMatchesResult> {
+    try {
+        const matches = await checkDriveMatches(folderId, recipients);
+        return { ok: true, matches };
+    } catch (error) {
+        return {
+            ok: false,
+            error: error instanceof Error ? error.message : 'Gagal memeriksa folder Google Drive.',
+        };
+    }
 }
 

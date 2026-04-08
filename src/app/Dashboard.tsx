@@ -6,7 +6,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useDropzone } from 'react-dropzone';
 import Papa from 'papaparse';
 import Image from 'next/image';
-import { analyzeCertificateAction, sendBroadcastAction, generateEmailPreviewAction, sendTestEmailAction, createBroadcastSession, sendSingleEmail, queuePendingRecipient, getBroadcastHistory, getBroadcastDetail, retryFailedBroadcast, updateRecipientEmailAction } from './actions/broadcast';
+import { analyzeCertificateActionSafe, generateEmailPreviewAction, sendTestEmailAction, createBroadcastSession, sendSingleEmail, queuePendingRecipient, getBroadcastHistory, getBroadcastDetail, retryFailedBroadcast, updateRecipientEmailAction } from './actions/broadcast';
 import { cleanAndValidateEmail } from '@/lib/validations';
 import { signOut, useSession } from 'next-auth/react';
 
@@ -237,6 +237,14 @@ export default function Dashboard() {
         return recipients.find(r => r.email === selectedPreviewRecipientEmail) || recipients[0];
     };
 
+    const getExistingDriveMatch = (recipient: { email: string }) => {
+        if (!driveMatches) {
+            return null;
+        }
+
+        return driveMatches.find((match) => match.email === recipient.email) || null;
+    };
+
     const handleOpenEmailPreview = async () => {
         const previewRecipient = getPreviewRecipient();
         if (!previewRecipient || !aiResult) {
@@ -278,13 +286,33 @@ export default function Dashboard() {
 
             if (certFolderPath.trim()) {
                 const { fetchCertificatesFromDrive, downloadDriveFile } = await import('./actions/gdrive');
-                const [match] = await fetchCertificatesFromDrive(certFolderPath.trim(), [previewRecipient]);
+                let match = getExistingDriveMatch(previewRecipient);
+
+                if (!match) {
+                    const [fetchedMatch] = await fetchCertificatesFromDrive(certFolderPath.trim(), [previewRecipient]);
+                    match = fetchedMatch
+                        ? {
+                            name: fetchedMatch.name,
+                            email: fetchedMatch.email,
+                            matched: !!fetchedMatch.fileId,
+                            fileName: fetchedMatch.fileName,
+                            fileId: fetchedMatch.fileId,
+                            resourceKey: fetchedMatch.resourceKey,
+                        }
+                        : null;
+                }
+
+                if (match && !match.fileId) {
+                    throw new Error(`Sertifikat PDF untuk ${previewRecipient.name} tidak ditemukan di Google Drive.`);
+                }
 
                 if (match?.fileId) {
                     const driveBuffer = await downloadDriveFile(match.fileId, match.resourceKey);
                     if (driveBuffer) {
                         certBuffer = Array.from(driveBuffer);
                         certFilename = match.fileName || `${previewRecipient.name}.pdf`;
+                    } else {
+                        throw new Error(`Gagal mengunduh sertifikat PDF untuk ${previewRecipient.name} dari Google Drive.`);
                     }
                 }
             }
@@ -298,7 +326,7 @@ export default function Dashboard() {
             }
 
             if (!certBuffer) {
-                throw new Error('Sertifikat PDF untuk penerima preview tidak ditemukan');
+                throw new Error(`Sertifikat PDF untuk ${previewRecipient.name} tidak ditemukan. Upload PDF lokal sebagai fallback atau periksa kecocokan di Google Drive.`);
             }
 
             const result = await sendTestEmailAction({
@@ -314,7 +342,7 @@ export default function Dashboard() {
             alert(`Test email berhasil dikirim ke ${result.sentTo} dengan lampiran sertifikat.`);
         } catch (error) {
             console.error('Send test email failed:', error);
-            alert('Gagal mengirim test email. Pastikan sertifikat PDF untuk penerima preview tersedia.');
+            alert(error instanceof Error ? error.message : 'Gagal mengirim test email.');
         } finally {
             setIsSendingTestEmail(false);
         }
@@ -387,7 +415,13 @@ export default function Dashboard() {
         formData.append('certificate', file);
 
         try {
-            const res = await analyzeCertificateAction(formData) as AiResult;
+            const result = await analyzeCertificateActionSafe(formData);
+            if (!result.ok) {
+                alert(result.error);
+                return;
+            }
+
+            const res = result.data as AiResult;
             setAiResult(res);
             setEditedCaption(res.caption);
             setAnalyzeProgress(100);
@@ -692,7 +726,19 @@ export default function Dashboard() {
                         <div className="space-y-8">
                             <div className="space-y-2">
                                 <h2 className="text-3xl font-semibold tracking-tight">Stage 1: The Visuals.</h2>
-                                <p className="text-[#86868b] text-lg">Upload the image you want AI to analyze and broadcast.</p>
+                                <p className="text-[#86868b] text-lg">Upload the event visual for AI analysis, then pair each recipient with their certificate from Google Drive.</p>
+                            </div>
+
+                            <div className="glass-panel p-5 space-y-3 border-white/10 bg-white/[0.02]">
+                                <h3 className="text-[11px] font-semibold uppercase tracking-widest text-[#86868b]">How It Works</h3>
+                                <ol className="space-y-2 text-sm text-[#c7c7cc] list-decimal list-inside">
+                                    <li>Upload CSV berisi nama dan email penerima.</li>
+                                    <li>Paste folder ID atau URL Google Drive yang berisi PDF sertifikat.</li>
+                                    <li>Klik <span className="font-semibold text-[#f5f5f7]">Cek Kecocokan Sertifikat</span> untuk memastikan setiap nama punya file PDF yang cocok.</li>
+                                    <li>Upload gambar poster atau visual acara lalu klik <span className="font-semibold text-[#f5f5f7]">Analyze with AI</span>.</li>
+                                    <li>AI akan mengisi <span className="font-semibold text-[#f5f5f7]">Event Name</span>, <span className="font-semibold text-[#f5f5f7]">Event Date</span>, dan <span className="font-semibold text-[#f5f5f7]">Caption Template</span> secara otomatis.</li>
+                                    <li>Preview email, lalu kirim broadcast.</li>
+                                </ol>
                             </div>
 
                             {/* Recipients Control */}
@@ -726,15 +772,15 @@ export default function Dashboard() {
 
                                 {/* Google Drive Folder ID */}
                                 <div className="space-y-3 pt-4 border-t border-white/5">
-                                    <label className="text-[10px] font-bold uppercase tracking-widest text-[#86868b]">Google Drive Folder ID</label>
+                                    <label className="text-[10px] font-bold uppercase tracking-widest text-[#86868b]">Google Drive Folder ID / URL</label>
                                     <input
                                         type="text"
                                         value={certFolderPath}
                                         onChange={(e) => setCertFolderPath(e.target.value)}
-                                        placeholder="e.g. 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms"
+                                        placeholder="Paste folder ID atau URL Google Drive"
                                         className="w-full bg-white/[0.03] border border-white/10 rounded-xl px-4 py-3 focus:ring-1 focus:ring-[#2997ff] focus:border-[#2997ff] text-[#f5f5f7] placeholder-[#424245] font-mono text-sm outline-none transition-all"
                                     />
-                                    <p className="text-[10px] text-[#86868b]">Ambil ID dari URL folder: <code className="bg-white/10 px-1.5 py-0.5 rounded">drive.google.com/drive/folders/<span className="text-[#2997ff]">FOLDER_ID</span></code></p>
+                                    <p className="text-[10px] text-[#86868b]">Bisa paste URL folder penuh atau ID saja. Contoh ID: <code className="bg-white/10 px-1.5 py-0.5 rounded">drive.google.com/drive/folders/<span className="text-[#2997ff]">FOLDER_ID</span></code></p>
 
                                     {/* Check Matches Button */}
                                     {certFolderPath.trim() && recipients.length > 0 && (
@@ -742,9 +788,15 @@ export default function Dashboard() {
                                             onClick={async () => {
                                                 setIsCheckingMatches(true);
                                                 try {
-                                                    const { checkDriveMatches } = await import('./actions/gdrive');
-                                                    const matches = await checkDriveMatches(certFolderPath.trim(), recipients);
-                                                    setDriveMatches(matches);
+                                                    const { checkDriveMatchesAction } = await import('./actions/gdrive');
+                                                    const result = await checkDriveMatchesAction(certFolderPath.trim(), recipients);
+                                                    if (!result.ok) {
+                                                        alert(result.error);
+                                                        setDriveMatches(null);
+                                                        return;
+                                                    }
+
+                                                    setDriveMatches(result.matches);
                                                 } catch (error) {
                                                     console.error('Check matches failed:', error);
                                                     alert('Gagal memeriksa kecocokan. Pastikan Folder ID valid dan folder bersifat publik.');
@@ -931,10 +983,28 @@ export default function Dashboard() {
                                 </div>
 
                                 <div className="max-w-3xl mx-auto glass-panel p-10 space-y-10 border-white/10 bg-white/[0.02] soft-glow">
-                                    <div className="flex justify-between items-center text-sm border-b border-white/5 pb-6">
-                                        <div className="space-y-1">
-                                            <span className="text-[#86868b] font-medium uppercase tracking-widest text-[10px]">Event Name</span>
-                                            <p className="text-lg font-medium">{aiResult.eventName}</p>
+                                    <div className="flex justify-between items-start gap-6 text-sm border-b border-white/5 pb-6">
+                                        <div className="space-y-4 flex-1 max-w-xl">
+                                            <div className="space-y-2">
+                                                <span className="text-[#86868b] font-medium uppercase tracking-widest text-[10px] block">Event Name</span>
+                                                <input
+                                                    type="text"
+                                                    value={aiResult.eventName}
+                                                    onChange={(e) => setAiResult({ ...aiResult, eventName: e.target.value })}
+                                                    className="w-full bg-white/5 border border-white/10 rounded-lg px-4 py-2 text-sm focus:border-[#2997ff] outline-none transition-colors"
+                                                    placeholder="Nama kegiatan hasil analisis"
+                                                />
+                                            </div>
+                                            <div className="space-y-2">
+                                                <span className="text-[#86868b] font-medium uppercase tracking-widest text-[10px] block">Event Date</span>
+                                                <input
+                                                    type="text"
+                                                    value={aiResult.eventDate}
+                                                    onChange={(e) => setAiResult({ ...aiResult, eventDate: e.target.value })}
+                                                    className="w-full bg-white/5 border border-white/10 rounded-lg px-4 py-2 text-sm focus:border-[#2997ff] outline-none transition-colors"
+                                                    placeholder="Tanggal kegiatan hasil analisis"
+                                                />
+                                            </div>
                                         </div>
                                         <div className="space-y-2">
                                             <span className="text-[#86868b] font-medium uppercase tracking-widest text-[10px] block text-right">Saved Profile</span>
@@ -1652,7 +1722,7 @@ function BroadcastHistorySection() {
                                                             </tr>
                                                         </thead>
                                                         <tbody className="divide-y divide-white/5">
-                                                            {getFilteredItems().map((item, i) => (
+                                                            {getFilteredItems().map((item) => (
                                                                 <tr key={item.id} className="hover:bg-white/[0.02] transition-colors">
                                                                     <td className="px-6 py-2.5 truncate max-w-[150px]">{item.name}</td>
                                                                     <td className="px-4 py-2.5 font-mono text-[#a1a1a6] truncate max-w-[200px]">

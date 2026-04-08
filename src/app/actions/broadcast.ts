@@ -53,6 +53,14 @@ function normalizeCaption(text: string): string {
     return rawNormalized.replace(/([.!?])\s+(?=(salam\s+hormat|hormat\s+kami|hormat\s+saya)\b)/gi, '$1\n\n');
 }
 
+function normalizeRecipientNameForEmail(name: string): string {
+    return name
+        .replace(/\s+/g, ' ')
+        .trim()
+        // Keep initials attached to the next token so email clients do not wrap after "A.".
+        .replace(/([A-Za-z])\.\s+(?=[A-Za-z])/g, '$1.\u00A0');
+}
+
 function buildYoutubeLinkHtml(youtubeUrl?: string): string {
     if (!youtubeUrl) {
         return '';
@@ -115,6 +123,20 @@ function splitCaptionClosing(text: string): { bodyText: string; closingText: str
     };
 }
 
+function splitCaptionGreeting(text: string): { greetingText: string; remainingText: string } {
+    const normalized = text.replace(/\r\n/g, '\n').trim();
+    const match = normalized.match(/^(Yth\.\s*Bapak\/Ibu[\s\S]*?),(?=\s*(salam|dengan|kami|terlampir|berikut)\b)/i);
+
+    if (!match) {
+        return { greetingText: '', remainingText: normalized };
+    }
+
+    const greetingText = match[0].trim();
+    const remainingText = normalized.slice(greetingText.length).trim();
+
+    return { greetingText, remainingText };
+}
+
 function formatClosingHtml(closingText: string, senderName?: string, senderContact?: string): string {
     if (!closingText) {
         return '';
@@ -158,8 +180,9 @@ function buildEmailTemplate({
     sender,
     youtubeUrl,
 }: EmailTemplateInput): { subject: string; html: string } {
+    const normalizedRecipientName = normalizeRecipientNameForEmail(recipientName);
     let personalizedCaptionRaw = caption
-        .replace(/\[Nama\]/g, recipientName)
+        .replace(/\[Nama\]/g, normalizedRecipientName)
         .replace(/\[Nama Pengirim\]/g, sender.name)
         .replace(/\[Nama Penyelenggara\/Tim\]/g, sender.name)
         .replace(/\[Tim Penyelenggara\]/g, sender.name)
@@ -180,7 +203,7 @@ function buildEmailTemplate({
 
     const safeEventName = sanitizeHtml(eventName);
     const safeEventDate = sanitizeHtml(eventDate);
-    const safeRecipientName = sanitizeHtml(recipientName);
+    const safeRecipientName = sanitizeHtml(normalizedRecipientName);
     const safeSenderName = sanitizeHtml(sender.name);
     const safeSenderDepartment = sanitizeHtml(sender.department);
     const safeSenderContact = sanitizeHtml(sender.contact || '');
@@ -189,6 +212,7 @@ function buildEmailTemplate({
     const captionHasClosing = /\b(hormat\s+kami|salam\s+hormat|hormat\s+saya)\b/i.test(personalizedCaption);
     const youtubeLinkHtml = buildYoutubeLinkHtml(youtubeUrl);
     const { bodyText: customCaptionBody, closingText: customCaptionClosing } = splitCaptionClosing(personalizedCaption);
+    const { greetingText: customGreetingText, remainingText: customCaptionMain } = splitCaptionGreeting(customCaptionBody);
 
     const formatCaptionParagraphs = (text: string): string => {
         const normalized = text.replace(/\r\n/g, '\n').trim();
@@ -232,7 +256,10 @@ function buildEmailTemplate({
             .join('\n');
     };
 
-    const formattedCaptionHtml = formatCaptionParagraphs(customCaptionBody);
+    const formattedGreetingHtml = customGreetingText
+        ? `<p style="margin-bottom: 16px;">${sanitizeHtml(customGreetingText)}</p>`
+        : '';
+    const formattedCaptionHtml = formatCaptionParagraphs(customCaptionMain);
     const formattedCustomClosingHtml = formatClosingHtml(customCaptionClosing, sender.name, sender.contact);
 
     const signatureFooterHtml = `
@@ -260,10 +287,11 @@ function buildEmailTemplate({
 `;
 
     const customBodyHtml = `
+    ${formattedGreetingHtml}
     ${formattedCaptionHtml}
     ${youtubeUrl && !captionContainsYoutubeUrl ? youtubeLinkHtml : ''}
     ${formattedCustomClosingHtml || (captionHasClosing ? '' : signatureFooterHtml)}
-`;
+    `;
 
     const standardBodyHtml = `
     ${defaultBodyHtml}
@@ -383,9 +411,24 @@ export async function analyzeCertificateAction(formData: FormData) {
     }
 
     const buffer = Buffer.from(await file.arrayBuffer());
-    const aiResult = await analyzeCertificate(buffer);
+    const aiResult = await analyzeCertificate(buffer, file.type || 'image/png');
 
     return aiResult;
+}
+
+export async function analyzeCertificateActionSafe(formData: FormData): Promise<
+    | { ok: true; data: Awaited<ReturnType<typeof analyzeCertificateAction>> }
+    | { ok: false; error: string }
+> {
+    try {
+        const data = await analyzeCertificateAction(formData);
+        return { ok: true, data };
+    } catch (error) {
+        return {
+            ok: false,
+            error: error instanceof Error ? error.message : 'Gagal menganalisis sertifikat.',
+        };
+    }
 }
 
 export async function sendBroadcastAction({
