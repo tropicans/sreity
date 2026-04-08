@@ -125,7 +125,7 @@ function splitCaptionClosing(text: string): { bodyText: string; closingText: str
 
 function splitCaptionGreeting(text: string): { greetingText: string; remainingText: string } {
     const normalized = text.replace(/\r\n/g, '\n').trim();
-    const match = normalized.match(/^(Yth\.\s*Bapak\/Ibu[\s\S]*?),(?=\s*(salam|dengan|kami|terlampir|berikut)\b)/i);
+    const match = normalized.match(/^(Yth\.\s*(?:Bapak\/Ibu\s*)?[\s\S]*?),(?=\s*(salam|dengan|kami|terlampir|berikut|semoga)\b)/i);
 
     if (!match) {
         return { greetingText: '', remainingText: normalized };
