@@ -621,7 +621,6 @@ export default function Dashboard() {
 
             const { broadcastId, immediateCount, pendingCount: pCount, defaultCertBuffer: sessionCertBuffer, emailDelayMs } = broadcastSession;
             setBroadcastTotal(immediateCount + pCount);
-            setBroadcastPendingCount(pCount);
 
             const allResults: SendResult[] = [];
 
@@ -642,45 +641,14 @@ export default function Dashboard() {
                 return undefined;
             };
 
-            // Phase 1: Queue pending recipients first so rerun can continue safely after interruptions.
-            if (pCount > 0) {
-                const pendingRecipients = remainingRecipients.slice(immediateCount);
-                for (let i = 0; i < pendingRecipients.length; i++) {
-                    if (broadcastAbortRef.current) break;
-
-                    const recipient = pendingRecipients[i];
-                    const progressIdx = i + 1;
-                    setCurrentRecipientEmail(`Menyimpan pending: ${recipient.name}...`);
-                    setBroadcastProgress(progressIdx);
-
-                    const certBuffer = await downloadCertForRecipient(recipient);
-
-                    const result = await queuePendingRecipient({
-                        broadcastId,
-                        recipient,
-                        certBuffer,
-                        defaultCertBuffer: sessionCertBuffer,
-                        caption: editedCaption,
-                        eventName: aiResult.eventName,
-                        eventDate: aiResult.eventDate,
-                        sender: senderForm,
-                        youtubeUrl: youtubeUrl.trim() || undefined,
-                        scheduleOffsetIndex: i,
-                    });
-
-                    allResults.push(result);
-                    setBroadcastResults(prev => [...prev, result]);
-                }
-            }
-
-            // Phase 2: Send immediate emails (download 1 → send 1)
+            // Phase 1: Send immediate emails first for faster perceived start and first delivery.
             const immediateRecipients = remainingRecipients.slice(0, immediateCount);
             for (let i = 0; i < immediateRecipients.length; i++) {
                 if (broadcastAbortRef.current) break;
 
                 const recipient = immediateRecipients[i];
                 setCurrentRecipientEmail(`Mendownload sertifikat ${recipient.name}...`);
-                setBroadcastProgress(pCount + i + 1);
+                setBroadcastProgress(i + 1);
 
                 const certBuffer = await downloadCertForRecipient(recipient);
 
@@ -702,6 +670,38 @@ export default function Dashboard() {
                 // Delay between emails (except last)
                 if (i < immediateRecipients.length - 1 && !broadcastAbortRef.current) {
                     await new Promise(resolve => setTimeout(resolve, emailDelayMs));
+                }
+            }
+
+            // Phase 2: Queue the remaining recipients after the initial batch is underway.
+            if (pCount > 0) {
+                const pendingRecipients = remainingRecipients.slice(immediateCount);
+                for (let i = 0; i < pendingRecipients.length; i++) {
+                    if (broadcastAbortRef.current) break;
+
+                    const recipient = pendingRecipients[i];
+                    const progressIdx = immediateCount + i + 1;
+                    setCurrentRecipientEmail(`Menyimpan pending: ${recipient.name}...`);
+                    setBroadcastProgress(progressIdx);
+
+                    const certBuffer = await downloadCertForRecipient(recipient);
+
+                    const result = await queuePendingRecipient({
+                        broadcastId,
+                        recipient,
+                        certBuffer,
+                        defaultCertBuffer: sessionCertBuffer,
+                        caption: editedCaption,
+                        eventName: aiResult.eventName,
+                        eventDate: aiResult.eventDate,
+                        sender: senderForm,
+                        youtubeUrl: youtubeUrl.trim() || undefined,
+                        scheduleOffsetIndex: i,
+                    });
+
+                    allResults.push(result);
+                    setBroadcastResults(prev => [...prev, result]);
+                    setBroadcastPendingCount(prev => prev + 1);
                 }
             }
 
@@ -1403,7 +1403,7 @@ export default function Dashboard() {
 
                             {/* Current Email */}
                             <div className="px-6 py-4">
-                                <p className="text-[10px] font-bold uppercase tracking-widest text-[#86868b] mb-1">Sedang mengirim</p>
+                                <p className="text-[10px] font-bold uppercase tracking-widest text-[#86868b] mb-1">Sedang memproses</p>
                                 <p className="text-sm text-white font-mono truncate">{currentRecipientEmail || '...'}</p>
                             </div>
 
