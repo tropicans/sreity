@@ -6,7 +6,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useDropzone } from 'react-dropzone';
 import Papa from 'papaparse';
 import Image from 'next/image';
-import { analyzeCertificateActionSafe, generateEmailPreviewAction, sendTestEmailAction, createBroadcastSession, sendSingleEmail, queuePendingRecipient, getBroadcastHistory, getBroadcastDetail, retryFailedBroadcast, updateRecipientEmailAction } from './actions/broadcast';
+import { analyzeCertificateActionSafe, generateEmailPreviewAction, sendTestEmailAction, createBroadcastSession, sendSingleEmail, queuePendingRecipient, getBroadcastHistory, getBroadcastDetail, retryFailedBroadcast, updateRecipientEmailAction, filterExistingRecipientsForEvent } from './actions/broadcast';
 import { cleanAndValidateEmail } from '@/lib/validations';
 import { signOut, useSession } from 'next-auth/react';
 
@@ -38,6 +38,13 @@ type DriveMatchResult = {
     fileName: string | null;
     fileId: string | null;
     resourceKey: string | null;
+};
+
+type ResumeSummary = {
+    skipped: number;
+    sent: number;
+    pending: number;
+    remaining: number;
 };
 
 export default function Dashboard() {
@@ -76,6 +83,7 @@ export default function Dashboard() {
     const [currentRecipientEmail, setCurrentRecipientEmail] = useState('');
     const [broadcastStartTime, setBroadcastStartTime] = useState<number | null>(null);
     const [broadcastPendingCount, setBroadcastPendingCount] = useState(0);
+    const [resumeSummary, setResumeSummary] = useState<ResumeSummary | null>(null);
     const broadcastAbortRef = useRef(false);
     const { data: session } = useSession();
     const deliveredCount = results?.filter((r) => r.status === 'success').length ?? 0;
@@ -105,6 +113,10 @@ export default function Dashboard() {
         }, 1000);
         return () => clearInterval(timer);
     }, [isBroadcasting, broadcastStartTime, formatElapsed]);
+
+    useEffect(() => {
+        setResumeSummary(null);
+    }, [file, recipientsText, aiResult?.eventName, aiResult?.eventDate]);
 
     const onDrop = (acceptedFiles: File[]) => {
         const images = acceptedFiles.filter(f => f.type.startsWith('image/'));
@@ -509,6 +521,46 @@ export default function Dashboard() {
             alert(`${invalidRecipients.length} penerima di-skip karena email tidak valid:\n${invalidRecipients.map(r => `• ${r.name} (${r.email || 'kosong'})`).join('\n')}`);
         }
 
+        const { remainingRecipients, skippedRecipients } = await filterExistingRecipientsForEvent({
+            recipients: validRecipients.map((recipient) => ({ name: recipient.name, email: recipient.email })),
+            eventName: aiResult.eventName,
+            eventDate: aiResult.eventDate,
+        });
+
+        let skipSummaryMessage = '';
+        if (skippedRecipients.length > 0) {
+            const sentCount = skippedRecipients.filter((recipient) => recipient.status === 'success').length;
+            const pendingCount = skippedRecipients.filter((recipient) => recipient.status === 'pending').length;
+            const skipSummary = [
+                sentCount > 0 ? `${sentCount} sudah terkirim` : null,
+                pendingCount > 0 ? `${pendingCount} masih pending` : null,
+            ].filter(Boolean).join(', ');
+
+            skipSummaryMessage = `${skippedRecipients.length} penerima dilewati karena event ini sudah pernah diproses (${skipSummary}).`;
+        }
+
+        if (remainingRecipients.length === 0) {
+            setResumeSummary({
+                skipped: skippedRecipients.length,
+                sent: skippedRecipients.filter((recipient) => recipient.status === 'success').length,
+                pending: skippedRecipients.filter((recipient) => recipient.status === 'pending').length,
+                remaining: 0,
+            });
+            alert(skipSummaryMessage || 'Semua penerima pada CSV ini sudah pernah diproses untuk event yang sama. Tidak ada email baru yang perlu dikirim.');
+            return;
+        }
+
+        setResumeSummary(skippedRecipients.length > 0 ? {
+            skipped: skippedRecipients.length,
+            sent: skippedRecipients.filter((recipient) => recipient.status === 'success').length,
+            pending: skippedRecipients.filter((recipient) => recipient.status === 'pending').length,
+            remaining: remainingRecipients.length,
+        } : null);
+
+        if (skipSummaryMessage) {
+            alert(`${skipSummaryMessage} Aplikasi akan melanjutkan ${remainingRecipients.length} penerima sisanya dari CSV yang sama.`);
+        }
+
         setIsProcessing(true);
         setIsBroadcasting(true);
         setBroadcastProgress(0);
@@ -558,7 +610,7 @@ export default function Dashboard() {
             // Create broadcast session (fast - no cert data)
             setCurrentRecipientEmail('Membuat sesi broadcast...');
             const broadcastSession = await createBroadcastSession({
-                recipients: validRecipients.map(r => ({ name: r.name, email: r.email })),
+                recipients: remainingRecipients.map(r => ({ name: r.name, email: r.email })),
                 defaultCertBuffer: defaultCertBuf,
                 caption: editedCaption,
                 eventName: aiResult.eventName,
@@ -567,12 +619,11 @@ export default function Dashboard() {
                 youtubeUrl: youtubeUrl.trim() || undefined,
             });
 
-            const { broadcastId, immediateCount, pendingCount: pCount, defaultCertBuffer: sessionCertBuffer } = broadcastSession;
+            const { broadcastId, immediateCount, pendingCount: pCount, defaultCertBuffer: sessionCertBuffer, emailDelayMs } = broadcastSession;
             setBroadcastTotal(immediateCount + pCount);
             setBroadcastPendingCount(pCount);
 
             const allResults: SendResult[] = [];
-            const emailDelayMs = 5000;
 
             // Helper: download cert for a single recipient
             const downloadCertForRecipient = async (recipient: { name: string; email: string }): Promise<number[] | undefined> => {
@@ -591,14 +642,45 @@ export default function Dashboard() {
                 return undefined;
             };
 
-            // Phase 1: Send immediate emails (download 1 → send 1)
-            const immediateRecipients = validRecipients.slice(0, immediateCount);
+            // Phase 1: Queue pending recipients first so rerun can continue safely after interruptions.
+            if (pCount > 0) {
+                const pendingRecipients = remainingRecipients.slice(immediateCount);
+                for (let i = 0; i < pendingRecipients.length; i++) {
+                    if (broadcastAbortRef.current) break;
+
+                    const recipient = pendingRecipients[i];
+                    const progressIdx = i + 1;
+                    setCurrentRecipientEmail(`Menyimpan pending: ${recipient.name}...`);
+                    setBroadcastProgress(progressIdx);
+
+                    const certBuffer = await downloadCertForRecipient(recipient);
+
+                    const result = await queuePendingRecipient({
+                        broadcastId,
+                        recipient,
+                        certBuffer,
+                        defaultCertBuffer: sessionCertBuffer,
+                        caption: editedCaption,
+                        eventName: aiResult.eventName,
+                        eventDate: aiResult.eventDate,
+                        sender: senderForm,
+                        youtubeUrl: youtubeUrl.trim() || undefined,
+                        scheduleOffsetIndex: i,
+                    });
+
+                    allResults.push(result);
+                    setBroadcastResults(prev => [...prev, result]);
+                }
+            }
+
+            // Phase 2: Send immediate emails (download 1 → send 1)
+            const immediateRecipients = remainingRecipients.slice(0, immediateCount);
             for (let i = 0; i < immediateRecipients.length; i++) {
                 if (broadcastAbortRef.current) break;
 
                 const recipient = immediateRecipients[i];
                 setCurrentRecipientEmail(`Mendownload sertifikat ${recipient.name}...`);
-                setBroadcastProgress(i + 1);
+                setBroadcastProgress(pCount + i + 1);
 
                 const certBuffer = await downloadCertForRecipient(recipient);
 
@@ -620,36 +702,6 @@ export default function Dashboard() {
                 // Delay between emails (except last)
                 if (i < immediateRecipients.length - 1 && !broadcastAbortRef.current) {
                     await new Promise(resolve => setTimeout(resolve, emailDelayMs));
-                }
-            }
-
-            // Phase 2: Queue pending recipients (download 1 → queue 1)
-            if (pCount > 0) {
-                const pendingRecipients = validRecipients.slice(immediateCount);
-                for (let i = 0; i < pendingRecipients.length; i++) {
-                    if (broadcastAbortRef.current) break;
-
-                    const recipient = pendingRecipients[i];
-                    const progressIdx = immediateCount + i + 1;
-                    setCurrentRecipientEmail(`Menyimpan pending: ${recipient.name}...`);
-                    setBroadcastProgress(progressIdx);
-
-                    const certBuffer = await downloadCertForRecipient(recipient);
-
-                    const result = await queuePendingRecipient({
-                        broadcastId,
-                        recipient,
-                        certBuffer,
-                        defaultCertBuffer: sessionCertBuffer,
-                        caption: editedCaption,
-                        eventName: aiResult.eventName,
-                        eventDate: aiResult.eventDate,
-                        sender: senderForm,
-                        youtubeUrl: youtubeUrl.trim() || undefined,
-                    });
-
-                    allResults.push(result);
-                    setBroadcastResults(prev => [...prev, result]);
                 }
             }
 
@@ -1116,6 +1168,18 @@ export default function Dashboard() {
                                             Preview dan test email memakai konten personalisasi recipient terpilih. Test email dikirim ke akun login Anda.
                                         </p>
                                     </div>
+
+                                    {resumeSummary && (
+                                        <div className="mt-6 rounded-2xl border border-[#ff9f0a]/20 bg-[#ff9f0a]/10 px-5 py-4 text-sm text-[#ffd8a1]">
+                                            <p className="text-[10px] font-bold uppercase tracking-widest text-[#ffb340]">Resume Detected</p>
+                                            <p className="mt-2">
+                                                {resumeSummary.skipped} penerima dari CSV yang sama sudah pernah diproses untuk event ini.
+                                            </p>
+                                            <p className="mt-1 text-xs text-[#ffd8a1]/80">
+                                                {resumeSummary.sent} sudah terkirim, {resumeSummary.pending} masih pending, {resumeSummary.remaining} akan diproses pada run ini.
+                                            </p>
+                                        </div>
+                                    )}
 
                                     <div className="pt-10 flex flex-col items-center gap-6">
                                         <button

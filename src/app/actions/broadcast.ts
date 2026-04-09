@@ -356,6 +356,12 @@ function getImmediateBatchLimit() {
     return Number.isNaN(parsed) || parsed < 1 ? GMAIL_IMMEDIATE_BATCH_LIMIT_DEFAULT : parsed;
 }
 
+function getPendingScheduleDate(offsetIndex = 0) {
+    const baseDelayMs = getPendingDelayHours() * 60 * 60 * 1000;
+    const spacingDelayMs = Math.max(getEmailDelay(), 1000) * Math.max(offsetIndex, 0);
+    return new Date(Date.now() + baseDelayMs + spacingDelayMs);
+}
+
 function validatePreviewInput({
     recipient,
     caption,
@@ -429,6 +435,62 @@ export async function analyzeCertificateActionSafe(formData: FormData): Promise<
             error: error instanceof Error ? error.message : 'Gagal menganalisis sertifikat.',
         };
     }
+}
+
+export async function filterExistingRecipientsForEvent({
+    recipients,
+    eventName,
+    eventDate,
+}: {
+    recipients: { name: string; email: string }[];
+    eventName: string;
+    eventDate: string;
+}): Promise<{
+    remainingRecipients: { name: string; email: string }[];
+    skippedRecipients: { email: string; status: string }[];
+}> {
+    await ensureAuthenticatedUser();
+
+    const safeEventName = sanitizeHtml(eventName);
+    const safeEventDate = sanitizeHtml(eventDate);
+    const candidateEmails = Array.from(new Set(recipients.map((recipient) => recipient.email)));
+
+    if (candidateEmails.length === 0) {
+        return {
+            remainingRecipients: [],
+            skippedRecipients: [],
+        };
+    }
+
+    const existingRecipients = await prisma.recipient.findMany({
+        where: {
+            email: { in: candidateEmails },
+            status: { in: ['success', 'pending'] },
+            broadcast: {
+                eventName: safeEventName,
+                eventDate: safeEventDate,
+            },
+        },
+        select: {
+            email: true,
+            status: true,
+        },
+    });
+
+    const skippedByEmail = new Map<string, string>();
+    for (const recipient of existingRecipients) {
+        const currentStatus = skippedByEmail.get(recipient.email);
+        if (currentStatus === 'success') {
+            continue;
+        }
+
+        skippedByEmail.set(recipient.email, recipient.status);
+    }
+
+    return {
+        remainingRecipients: recipients.filter((recipient) => !skippedByEmail.has(recipient.email)),
+        skippedRecipients: Array.from(skippedByEmail.entries()).map(([email, status]) => ({ email, status })),
+    };
 }
 
 export async function sendBroadcastAction({
@@ -513,9 +575,7 @@ export async function sendBroadcastAction({
         : [];
 
     if (pendingRecipients.length > 0) {
-        const scheduledFor = new Date(Date.now() + getPendingDelayHours() * 60 * 60 * 1000);
-
-        const createOperations = pendingRecipients.map((recipient) => {
+        const createOperations = pendingRecipients.map((recipient, index) => {
             const { subject, html } = buildEmailTemplate({
                 recipientName: recipient.name,
                 caption,
@@ -537,7 +597,7 @@ export async function sendBroadcastAction({
                             html,
                             certificateFilename: `Sertifikat_${recipient.name.replace(/\s+/g, '_')}.pdf`,
                             certificate: Buffer.from(recipient.certBuffer && recipient.certBuffer.length > 0 ? recipient.certBuffer : firstAvailableCertificate),
-                            scheduledFor,
+                            scheduledFor: getPendingScheduleDate(index),
                             broadcastId: broadcast.id,
                         }
                     }
@@ -725,6 +785,7 @@ export async function createBroadcastSession({
     immediateCount: number;
     pendingCount: number;
     defaultCertBuffer: number[];
+    emailDelayMs: number;
 }> {
     const user = await ensureAuthenticatedUser();
 
@@ -788,6 +849,7 @@ export async function createBroadcastSession({
         immediateCount,
         pendingCount,
         defaultCertBuffer: Array.from(defaultCertBuffer),
+        emailDelayMs: getEmailDelay(),
     };
 }
 
@@ -801,6 +863,7 @@ export async function queuePendingRecipient({
     eventDate,
     sender,
     youtubeUrl,
+    scheduleOffsetIndex,
 }: {
     broadcastId: string;
     recipient: { name: string; email: string };
@@ -811,10 +874,11 @@ export async function queuePendingRecipient({
     eventDate: string;
     sender: { name: string; department: string; contact: string };
     youtubeUrl?: string;
+    scheduleOffsetIndex?: number;
 }): Promise<{ email: string; status: string }> {
     await ensureAuthenticatedUser();
 
-    const scheduledFor = new Date(Date.now() + getPendingDelayHours() * 60 * 60 * 1000);
+    const scheduledFor = getPendingScheduleDate(scheduleOffsetIndex);
 
     const { subject, html } = buildEmailTemplate({
         recipientName: recipient.name,
@@ -1087,7 +1151,7 @@ export async function retryFailedBroadcast(broadcastId: string) {
     const certBuffer = Buffer.from(broadcast.certificate);
 
     // We will do all updates in a single transaction for safety
-    const operations = failedRecipients.map(recipient => {
+    const operations = failedRecipients.map((recipient, index) => {
         const updateRecipientParams = {
             where: { id: recipient.id },
             data: { status: 'pending' }
@@ -1103,7 +1167,7 @@ export async function retryFailedBroadcast(broadcastId: string) {
                         update: {
                             attempts: 0,
                             lastError: null,
-                            scheduledFor: new Date()
+                            scheduledFor: getPendingScheduleDate(index)
                         }
                     }
                 }
@@ -1129,7 +1193,7 @@ export async function retryFailedBroadcast(broadcastId: string) {
                             certificateFilename: `Sertifikat_${recipient.name.replace(/\s+/g, '_')}.pdf`,
                             certificate: certBuffer,
                             attempts: 0,
-                            scheduledFor: new Date(),
+                            scheduledFor: getPendingScheduleDate(index),
                             broadcastId,
                         }
                     }
